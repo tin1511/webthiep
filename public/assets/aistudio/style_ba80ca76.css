@@ -1,0 +1,25 @@
+:root{color-scheme:dark;box-sizing:border-box}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0;background:#0b1622;color:#f5ecdc;font-family:"Be Vietnam Pro",system-ui,sans-serif;overflow:hidden}
+canvas{position:fixed;inset:0;display:block;touch-action:none}
+.ui{position:fixed;left:0;right:0;bottom:0;padding:16px 16px calc(24px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;align-items:center;gap:12px;pointer-events:none;text-align:center}
+.ui>*{pointer-events:auto}
+.hint{margin:0;font-weight:300;opacity:.75;font-size:.95rem}
+.btn{font:inherit;font-weight:500;background:#ffd98a;color:#1a1208;border:0;border-radius:999px;padding:12px 26px;min-height:44px;cursor:pointer}
+.btn:focus-visible{outline:3px solid #fff;outline-offset:3px}
+#ov{position:fixed;inset:0;background:rgba(5,10,18,.88);display:flex;align-items:center;justify-content:center;padding:20px;overflow:auto}
+.paper{background:#fff7ec;color:#2a1a1c;max-width:560px;width:100%;padding:28px 24px;border-radius:6px;font-family:"Be Vietnam Pro",system-ui,"Segoe UI",Arial,sans-serif;font-weight:400;font-size:1.02rem;line-height:1.85}
+.paper p{margin:0 0 1em}
+.paper .sign{text-align:right;font-style:italic}
+.pic{text-align:center;max-width:92vw}
+.pic img{max-width:100%;max-height:68vh;border:10px solid #fff7ec;border-bottom-width:36px;border-radius:2px}
+.pic p{margin:12px 0 0}
+.adm{margin:auto}.adm h2,.adm h3{margin:0 0 12px;font-family:"Be Vietnam Pro",sans-serif}.adm h3{margin-top:18px;font-size:1rem}
+.lab{display:block;margin:0 0 14px;font:500 .85rem "Be Vietnam Pro",sans-serif}
+.lab input,.lab textarea{display:block;width:100%;margin-top:4px;padding:10px;font:1rem "Be Vietnam Pro",system-ui,"Segoe UI",Arial,sans-serif;border:1px solid #d9c3b8;border-radius:6px;background:#fff;color:#2a1a1c}
+.ph{display:flex;gap:8px;align-items:center;margin:0 0 10px}
+.ph input{flex:1;min-width:0;padding:8px;font:.95rem "Be Vietnam Pro",system-ui,"Segoe UI",Arial,sans-serif;border:1px solid #d9c3b8;border-radius:6px;background:#fff;color:#2a1a1c}
+.th{width:52px;height:52px;flex:none;border-radius:6px;background:linear-gradient(135deg,#ff8a9a,#ffd98a) center/cover}
+.sm{font:.85rem "Be Vietnam Pro",system-ui,"Segoe UI",Arial,sans-serif;border:1px solid #d9c3b8;background:#fff;color:#2a1a1c;border-radius:999px;padding:8px 12px;min-height:40px;cursor:pointer}
+.row{display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-end;margin-top:14px}

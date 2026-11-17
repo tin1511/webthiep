@@ -1,0 +1,31 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /cards/{cardCode}/{allPaths=**} {
+      // Cho phép trang /c/<mã> công khai hiển thị ảnh và nghe giọng nói
+      allow read: if true;
+
+      // Chống lạm dụng: giới hạn dung lượng (ảnh <= 400KB, audio <= 1MB) và kiểm tra đúng định dạng
+      allow create: if request.resource != null && (
+        (request.resource.contentType.matches('image/.*') && request.resource.size <= 400 * 1024) ||
+        (request.resource.contentType.matches('audio/.*') && request.resource.size <= 1024 * 1024)
+      );
+
+      // Chỉ người sở hữu (lưu trong metadata.ownerId) hoặc admin mới được xóa/ghi đè
+      allow update, delete: if request.auth != null && (
+        (resource != null && resource.metadata != null && resource.metadata.ownerId == request.auth.uid) ||
+        request.auth.token.admin == true
+      );
+    }
+
+    match /giftSets/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.token.admin == true;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

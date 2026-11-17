@@ -1,0 +1,236 @@
+{
+  "entities": {
+    "WebCard": {
+      "title": "WebCard",
+      "description": "Web thiệp 3D cá nhân hóa tạo theo yêu cầu, đọc công khai theo mã /c/<code>.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "Mã đường dẫn /c/<code> (ngẫu nhiên hoặc tùy chỉnh ở gói Cao cấp).",
+          "minLength": 2,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "description": "UID người dùng Firebase hoặc 'guest' nếu tạo không cần đăng nhập.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "occasion": {
+          "type": "string",
+          "enum": ["noel", "to-tinh", "valentine", "tet", "sinh-nhat"],
+          "minLength": 2,
+          "maxLength": 20
+        },
+        "tier": {
+          "type": "string",
+          "enum": ["basic", "custom", "premium"],
+          "minLength": 5,
+          "maxLength": 10
+        },
+        "price": {
+          "type": "number",
+          "description": "Giá đơn (0 nếu được tặng kèm khi mua Set quà)."
+        },
+        "recipientName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "senderName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "greeting": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "letter": { "type": "string", "minLength": 1, "maxLength": 10000 },
+        "accentColor": { "type": "string", "minLength": 4, "maxLength": 20 },
+        "bgmId": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "photosJson": {
+          "type": "string",
+          "description": "JSON danh sách tối đa 6 ảnh kỷ niệm (URL Storage hoặc data URL đã nén <= 300KB).",
+          "minLength": 2,
+          "maxLength": 900000
+        },
+        "voiceAudioUrl": { "type": "string", "minLength": 0, "maxLength": 1500000 },
+        "status": {
+          "type": "string",
+          "enum": ["pending_payment", "active", "expired"],
+          "minLength": 6,
+          "maxLength": 20
+        },
+        "locked": { "type": "boolean" },
+        "orderCode": { "type": "string", "minLength": 3, "maxLength": 64 },
+        "giftOrderId": { "type": "string", "minLength": 0, "maxLength": 64 },
+        "expiresAtMs": { "type": "number" },
+        "createdAtMs": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "code",
+        "userId",
+        "occasion",
+        "tier",
+        "price",
+        "recipientName",
+        "senderName",
+        "greeting",
+        "letter",
+        "accentColor",
+        "bgmId",
+        "photosJson",
+        "status",
+        "locked",
+        "orderCode",
+        "createdAtMs",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "GiftSet": {
+      "title": "GiftSet",
+      "description": "Sản phẩm Set quà Nam / Nữ / Theo dịp / Theo ngân sách.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "title": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "audience": { "type": "string", "enum": ["nu", "nam", "unisex"], "minLength": 2, "maxLength": 10 },
+        "occasionTag": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "price": { "type": "number" },
+        "imageUrl": { "type": "string", "minLength": 1, "maxLength": 500000 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 1500 },
+        "itemsJson": { "type": "string", "minLength": 2, "maxLength": 4000 },
+        "inStock": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "title",
+        "audience",
+        "occasionTag",
+        "price",
+        "imageUrl",
+        "description",
+        "itemsJson",
+        "inStock",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ShopOrder": {
+      "title": "ShopOrder",
+      "description": "Đơn hàng Web thiệp hoặc Set quà.",
+      "type": "object",
+      "properties": {
+        "orderCode": { "type": "string", "minLength": 3, "maxLength": 64, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "orderType": { "type": "string", "enum": ["web_card", "gift_set"], "minLength": 7, "maxLength": 12 },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "customerEmail": { "type": "string", "minLength": 0, "maxLength": 200 },
+        "customerName": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "customerPhone": { "type": "string", "minLength": 0, "maxLength": 30 },
+        "customerAddress": { "type": "string", "minLength": 0, "maxLength": 400 },
+        "note": { "type": "string", "minLength": 0, "maxLength": 600 },
+        "wantPrintedQr": { "type": "boolean" },
+        "itemsJson": { "type": "string", "minLength": 2, "maxLength": 20000 },
+        "totalAmount": { "type": "number" },
+        "cardCode": { "type": "string", "minLength": 0, "maxLength": 64 },
+        "giftFreeCardClaimed": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["pending_payment", "paid", "delivered", "cancelled"], "minLength": 4, "maxLength": 20 },
+        "customerMarkedPaid": { "type": "boolean" },
+        "createdAtMs": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "orderCode",
+        "orderType",
+        "userId",
+        "customerName",
+        "itemsJson",
+        "totalAmount",
+        "status",
+        "customerMarkedPaid",
+        "createdAtMs",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PaymentNotification": {
+      "title": "PaymentNotification",
+      "description": "Thông báo khách bấm 'Đã chuyển khoản' để Admin đối chiếu VietQR.",
+      "type": "object",
+      "properties": {
+        "orderCode": { "type": "string", "minLength": 3, "maxLength": 64, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "amount": { "type": "number" },
+        "note": { "type": "string", "minLength": 0, "maxLength": 300 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["orderCode", "amount", "createdAt"]
+    },
+    "CustomerProfile": {
+      "title": "CustomerProfile",
+      "description": "Hồ sơ khách hàng đã đăng ký Firebase Authentication.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "email": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "provider": { "type": "string", "minLength": 3, "maxLength": 30 },
+        "agreedTerms": { "type": "boolean" },
+        "createdAtMs": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "email", "provider", "agreedTerms", "createdAtMs", "updatedAt"]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Danh sách UID quản trị viên hợp lệ.",
+      "type": "object",
+      "properties": {
+        "role": { "type": "string", "enum": ["admin"], "minLength": 5, "maxLength": 5 },
+        "email": { "type": "string", "minLength": 0, "maxLength": 200 },
+        "mustChangePassword": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["role"]
+    },
+    "PricingSetting": {
+      "title": "PricingSetting",
+      "description": "Bảng giá cập nhật từ trang quản trị.",
+      "type": "object",
+      "properties": {
+        "tiersJson": { "type": "string", "minLength": 2, "maxLength": 15000 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tiersJson", "updatedBy", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/webCards/{cardCode}": {
+      "schema": { "$ref": "#/entities/WebCard" },
+      "description": "Web thiệp công khai đọc theo mã /c/<code>."
+    },
+    "/giftSets/{setId}": {
+      "schema": { "$ref": "#/entities/GiftSet" },
+      "description": "Danh mục Set quà Nam/Nữ/Theo dịp."
+    },
+    "/orders/{orderCode}": {
+      "schema": { "$ref": "#/entities/ShopOrder" },
+      "description": "Đơn đặt hàng web thiệp và set quà."
+    },
+    "/paymentNotifications/{notifId}": {
+      "schema": { "$ref": "#/entities/PaymentNotification" },
+      "description": "Thông báo đã chuyển khoản từ khách."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/CustomerProfile" },
+      "description": "Hồ sơ khách hàng."
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Quyền Admin xác định theo document UID."
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/PricingSetting" },
+      "description": "Cấu hình bảng giá."
+    }
+  }
+}

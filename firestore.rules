@@ -1,0 +1,348 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 2 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Quyền admin xác định bằng collection Firestore "admins/<UID>" hoặc custom claim "admin == true"
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.admin == true
+      );
+    }
+
+    function isValidWebCard(data) {
+      return data.keys().hasAll([
+        'code',
+        'userId',
+        'occasion',
+        'tier',
+        'price',
+        'recipientName',
+        'senderName',
+        'greeting',
+        'letter',
+        'accentColor',
+        'bgmId',
+        'photosJson',
+        'status',
+        'locked',
+        'orderCode',
+        'createdAtMs',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'code',
+        'userId',
+        'occasion',
+        'tier',
+        'price',
+        'recipientName',
+        'senderName',
+        'greeting',
+        'letter',
+        'accentColor',
+        'bgmId',
+        'photosJson',
+        'voiceAudioUrl',
+        'status',
+        'locked',
+        'orderCode',
+        'giftOrderId',
+        'expiresAtMs',
+        'createdAtMs',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      isValidId(data.code) &&
+      isValidId(data.userId) &&
+      data.occasion in ['noel', 'to-tinh', 'valentine', 'tet', 'sinh-nhat'] &&
+      data.tier in ['basic', 'custom', 'premium'] &&
+      data.price is number && data.price >= 0 && data.price <= 10000000 &&
+      data.recipientName is string && data.recipientName.size() >= 1 && data.recipientName.size() <= 120 &&
+      data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 120 &&
+      data.greeting is string && data.greeting.size() >= 1 && data.greeting.size() <= 160 &&
+      data.letter is string && data.letter.size() >= 1 && data.letter.size() <= 10000 &&
+      data.accentColor is string && data.accentColor.size() >= 4 && data.accentColor.size() <= 20 &&
+      data.bgmId is string && data.bgmId.size() >= 1 && data.bgmId.size() <= 120 &&
+      data.photosJson is string && data.photosJson.size() >= 2 && data.photosJson.size() <= 900000 &&
+      (!('voiceAudioUrl' in data) || (data.voiceAudioUrl is string && data.voiceAudioUrl.size() <= 1500000)) &&
+      data.status in ['pending_payment', 'active', 'expired'] &&
+      data.locked is bool &&
+      isValidId(data.orderCode) &&
+      (!('giftOrderId' in data) || (data.giftOrderId is string && data.giftOrderId.size() <= 64)) &&
+      (!('expiresAtMs' in data) || (data.expiresAtMs == null || data.expiresAtMs is number)) &&
+      data.createdAtMs is number &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidGiftSet(data) {
+      return data.keys().hasAll([
+        'id',
+        'title',
+        'audience',
+        'occasionTag',
+        'price',
+        'imageUrl',
+        'description',
+        'itemsJson',
+        'inStock',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'id',
+        'title',
+        'audience',
+        'occasionTag',
+        'price',
+        'imageUrl',
+        'description',
+        'itemsJson',
+        'inStock',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      isValidId(data.id) &&
+      data.title is string && data.title.size() >= 2 && data.title.size() <= 140 &&
+      data.audience in ['nu', 'nam', 'unisex'] &&
+      data.occasionTag is string && data.occasionTag.size() >= 1 && data.occasionTag.size() <= 40 &&
+      data.price is number && data.price >= 0 && data.price <= 50000000 &&
+      data.imageUrl is string && data.imageUrl.size() >= 1 && data.imageUrl.size() <= 500000 &&
+      data.description is string && data.description.size() >= 1 && data.description.size() <= 1500 &&
+      data.itemsJson is string && data.itemsJson.size() >= 2 && data.itemsJson.size() <= 4000 &&
+      data.inStock is bool &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidShopOrder(data) {
+      return data.keys().hasAll([
+        'orderCode',
+        'orderType',
+        'userId',
+        'customerName',
+        'itemsJson',
+        'totalAmount',
+        'status',
+        'customerMarkedPaid',
+        'createdAtMs',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'orderCode',
+        'orderType',
+        'userId',
+        'customerEmail',
+        'customerName',
+        'customerPhone',
+        'customerAddress',
+        'note',
+        'wantPrintedQr',
+        'itemsJson',
+        'totalAmount',
+        'cardCode',
+        'giftFreeCardClaimed',
+        'status',
+        'customerMarkedPaid',
+        'createdAtMs',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      isValidId(data.orderCode) &&
+      data.orderType in ['web_card', 'gift_set'] &&
+      isValidId(data.userId) &&
+      (!('customerEmail' in data) || (data.customerEmail is string && data.customerEmail.size() <= 200)) &&
+      data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 140 &&
+      (!('customerPhone' in data) || (data.customerPhone is string && data.customerPhone.size() <= 30)) &&
+      (!('customerAddress' in data) || (data.customerAddress is string && data.customerAddress.size() <= 400)) &&
+      (!('note' in data) || (data.note is string && data.note.size() <= 600)) &&
+      (!('wantPrintedQr' in data) || data.wantPrintedQr is bool) &&
+      data.itemsJson is string && data.itemsJson.size() >= 2 && data.itemsJson.size() <= 20000 &&
+      data.totalAmount is number && data.totalAmount >= 0 && data.totalAmount <= 100000000 &&
+      (!('cardCode' in data) || (data.cardCode is string && data.cardCode.size() <= 64)) &&
+      (!('giftFreeCardClaimed' in data) || data.giftFreeCardClaimed is bool) &&
+      data.status in ['pending_payment', 'paid', 'delivered', 'cancelled'] &&
+      data.customerMarkedPaid is bool &&
+      data.createdAtMs is number &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidPaymentNotification(data) {
+      return data.keys().hasAll(['orderCode', 'amount', 'createdAt']) &&
+      data.keys().hasOnly(['orderCode', 'amount', 'note', 'createdAt']) &&
+      isValidId(data.orderCode) &&
+      data.amount is number && data.amount >= 0 && data.amount <= 100000000 &&
+      (!('note' in data) || (data.note is string && data.note.size() <= 300)) &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidCustomerProfile(data) {
+      return data.keys().hasAll([
+        'uid',
+        'displayName',
+        'email',
+        'provider',
+        'agreedTerms',
+        'createdAtMs',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'uid',
+        'displayName',
+        'email',
+        'provider',
+        'agreedTerms',
+        'createdAtMs',
+        'updatedAt'
+      ]) &&
+      isValidId(data.uid) &&
+      data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 140 &&
+      data.email is string && data.email.size() >= 3 && data.email.size() <= 200 &&
+      data.provider is string && data.provider.size() >= 3 && data.provider.size() <= 30 &&
+      data.agreedTerms is bool &&
+      data.createdAtMs is number &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidPricingSetting(data) {
+      return data.keys().hasAll(['tiersJson', 'updatedBy', 'updatedAt']) &&
+      data.keys().hasOnly(['tiersJson', 'updatedBy', 'updatedAt']) &&
+      data.tiersJson is string && data.tiersJson.size() >= 2 && data.tiersJson.size() <= 15000 &&
+      isValidId(data.updatedBy) &&
+      data.updatedAt is timestamp;
+    }
+
+    // 1. WEB THIỆP CÔNG KHAI THEO MÃ (/c/<code>)
+    match /webCards/{cardCode} {
+      allow get: if isValidId(cardCode);
+      allow list: if isAdmin() || (isSignedIn() && existing().userId == request.auth.uid);
+
+      allow create: if (
+        isValidId(cardCode) &&
+        isValidWebCard(incoming()) &&
+        incoming().code == cardCode &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            incoming().locked == false &&
+            incoming().status == 'pending_payment' &&
+            (
+              incoming().userId == 'guest' ||
+              (isSignedIn() && incoming().userId == request.auth.uid)
+            )
+          )
+        )
+      );
+
+      allow update: if isAdmin() && isValidWebCard(incoming()) && incoming().updatedAt == request.time;
+      allow delete: if isAdmin() || (isSignedIn() && existing().userId == request.auth.uid);
+    }
+
+    // 2. DANH MỤC SET QUÀ (CÔNG KHAI XEM, CHỈ ADMIN SỬA)
+    match /giftSets/{setId} {
+      allow get, list: if isValidId(setId);
+      allow create, update: if isAdmin() && isValidId(setId) && isValidGiftSet(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // 3. ĐƠN HÀNG (KHÁCH CHỈ ĐƯỢC TẠO ĐƠN, CHỈ ADMIN ĐỌC TOÀN BỘ & ĐỔI TRẠNG THÁI)
+    match /orders/{orderCode} {
+      allow get: if isAdmin() || (isSignedIn() && existing().userId == request.auth.uid);
+      allow list: if isAdmin() || (isSignedIn() && existing().userId == request.auth.uid);
+
+      allow create: if (
+        isValidId(orderCode) &&
+        isValidShopOrder(incoming()) &&
+        incoming().orderCode == orderCode &&
+        incoming().status == 'pending_payment' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          incoming().userId == 'guest' ||
+          (isSignedIn() && incoming().userId == request.auth.uid)
+        )
+      );
+
+      allow update: if (
+        isAdmin() &&
+        isValidShopOrder(incoming()) &&
+        incoming().orderCode == existing().orderCode &&
+        incoming().updatedAt == request.time
+      ) || (
+        isSignedIn() &&
+        existing().userId == request.auth.uid &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'customerMarkedPaid',
+          'giftFreeCardClaimed',
+          'cardCode',
+          'updatedAt'
+        ]) &&
+        incoming().updatedAt == request.time
+      );
+
+      allow delete: if isAdmin() || (isSignedIn() && existing().userId == request.auth.uid);
+    }
+
+    // 4. THÔNG BÁO "ĐÃ CHUYỂN KHOẢN" TỪ KHÁCH (CHỈ TẠO, KHÔNG ĐỌC CHÉO)
+    match /paymentNotifications/{notifId} {
+      allow get, list: if isAdmin();
+      allow create: if isValidId(notifId) && isValidPaymentNotification(incoming()) && incoming().createdAt == request.time;
+      allow update, delete: if isAdmin();
+    }
+
+    // 5. HỒ SƠ KHÁCH HÀNG
+    match /users/{userId} {
+      allow get, list: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
+      allow create: if isSignedIn() && request.auth.uid == userId && isValidCustomerProfile(incoming()) && incoming().uid == userId;
+      allow update: if isAdmin() || (isSignedIn() && request.auth.uid == userId && isValidCustomerProfile(incoming()) && incoming().uid == existing().uid);
+      allow delete: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
+    }
+
+    // 6. DANH SÁCH ADMIN (CHỈ TẠO TRONG FIREBASE CONSOLE; ADMIN TỰ TẮT CỜ mustChangePassword)
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && (request.auth.uid == adminId || isAdmin());
+      allow list: if isAdmin();
+      allow create, delete: if false;
+      allow update: if isSignedIn() &&
+        request.auth.uid == adminId &&
+        isAdmin() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['mustChangePassword', 'updatedAt']) &&
+        incoming().mustChangePassword is bool &&
+        incoming().updatedAt == request.time;
+    }
+
+    // 7. CẤU HÌNH BẢNG GIÁ (CÔNG KHAI ĐỌC, CHỈ ADMIN SỬA)
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId) && settingId == 'pricing';
+      allow list: if false;
+      allow create, update: if isAdmin() && isValidId(settingId) && settingId == 'pricing' && isValidPricingSetting(incoming()) && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+  }
+}

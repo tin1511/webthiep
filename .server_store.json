@@ -1,0 +1,29 @@
+{
+  "adminPassword": "123",
+  "vieneuConfig": {
+    "apiUrl": "https://api.vieneu.io/api/v1/audio/speech",
+    "apiKey": "vn_test_025534eb46adf97cc3910b0d2ed509d6d8b094680e149ba2",
+    "defaultVoice": "Bảo Long"
+  },
+  "paymentConfig": {
+    "qrImageUrl": "",
+    "bankName": "MB Bank (Ngân hàng Quân Đội)",
+    "accountNumber": "0987654321",
+    "accountHolder": "ADMIN GIÁNG SINH 3D",
+    "amountText": "29.000 VNĐ",
+    "transferSyntax": "NOEL3D"
+  },
+  "cards": {},
+  "users": {
+    "btin2499@gmail.com": {
+      "uid": "SgsBxdN2umZJGAjTquNXr8LqSA32",
+      "email": "btin2499@gmail.com",
+      "displayName": "Tịnh Nguyên",
+      "passwordHash": "",
+      "provider": "google",
+      "disabled": false,
+      "createdAtMs": 1794726322655,
+      "lastLoginAtMs": 1794726322655
+    }
+  }
+}

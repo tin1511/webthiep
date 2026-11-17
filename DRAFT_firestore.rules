@@ -1,0 +1,334 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'dthong.design2016@gmail.com' ||
+        request.auth.token.email == 'btin2499@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidGreetingConfig(data) {
+      return data.keys().hasAll([
+        'headline1',
+        'headline2',
+        'letter',
+        'sign',
+        'photoCount',
+        'ownerId',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'headline1',
+        'headline2',
+        'letter',
+        'sign',
+        'photoCount',
+        'bgm',
+        'ownerId',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.headline1 is string && data.headline1.size() >= 1 && data.headline1.size() <= 100 &&
+      data.headline2 is string && data.headline2.size() >= 1 && data.headline2.size() <= 100 &&
+      data.letter is string && data.letter.size() >= 1 && data.letter.size() <= 10000 &&
+      data.sign is string && data.sign.size() >= 1 && data.sign.size() <= 200 &&
+      data.photoCount is int && data.photoCount >= 1 && data.photoCount <= 12 &&
+      (!('bgm' in data) || (data.bgm is string && data.bgm.size() >= 1 && data.bgm.size() <= 600000)) &&
+      isValidId(data.ownerId) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidTreePhoto(data) {
+      return data.keys().hasAll([
+        'greetingId',
+        'order',
+        'caption',
+        'src',
+        'ownerId',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'greetingId',
+        'order',
+        'caption',
+        'src',
+        'ownerId',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      isValidId(data.greetingId) &&
+      data.order is int && data.order >= 0 && data.order <= 11 &&
+      data.caption is string && data.caption.size() >= 1 && data.caption.size() <= 200 &&
+      data.src is string && data.src.size() >= 10 && data.src.size() <= 800000 &&
+      isValidId(data.ownerId) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidChristmasCard(data) {
+      return data.keys().hasAll([
+        'id',
+        'userId',
+        'recipientName',
+        'senderName',
+        'message',
+        'theme',
+        'voiceStyle',
+        'bgm',
+        'photoCount',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'id',
+        'userId',
+        'recipientName',
+        'senderName',
+        'message',
+        'theme',
+        'voiceStyle',
+        'bgm',
+        'photoCount',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      isValidId(data.id) &&
+      isValidId(data.userId) &&
+      data.recipientName is string && data.recipientName.size() >= 1 && data.recipientName.size() <= 120 &&
+      data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 120 &&
+      data.message is string && data.message.size() >= 1 && data.message.size() <= 10000 &&
+      data.theme is string && data.theme.size() >= 1 && data.theme.size() <= 60 &&
+      data.voiceStyle is string && data.voiceStyle.size() >= 1 && data.voiceStyle.size() <= 60 &&
+      data.bgm is string && data.bgm.size() >= 1 && data.bgm.size() <= 600000 &&
+      data.photoCount is int && data.photoCount >= 1 && data.photoCount <= 12 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidAdminConfig(data) {
+      return data.keys().hasAll([
+        'password',
+        'updatedBy',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'password',
+        'updatedBy',
+        'updatedAt'
+      ]) &&
+      data.password is string && data.password.size() >= 1 && data.password.size() <= 128 &&
+      isValidId(data.updatedBy) &&
+      data.updatedAt is timestamp;
+    }
+
+    match /greetings/{greetingId} {
+      allow get: if isValidId(greetingId);
+      allow list: if false;
+
+      allow create: if (
+        isVerifiedUser() &&
+        isValidId(greetingId) &&
+        isValidGreetingConfig(incoming()) &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time
+      );
+
+      allow update: if (
+        isVerifiedUser() &&
+        isValidId(greetingId) &&
+        isValidGreetingConfig(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'headline1',
+          'headline2',
+          'letter',
+          'sign',
+          'photoCount',
+          'bgm',
+          'updatedAt'
+        ]) &&
+        (existing().ownerId == request.auth.uid || isAdmin())
+      );
+
+      allow delete: if (
+        isVerifiedUser() &&
+        isValidId(greetingId) &&
+        (existing().ownerId == request.auth.uid || isAdmin())
+      );
+
+      match /photos/{photoId} {
+        allow get: if isValidId(greetingId) && isValidId(photoId);
+        allow list: if false;
+
+        allow create: if (
+          isVerifiedUser() &&
+          isValidId(greetingId) &&
+          isValidId(photoId) &&
+          isValidTreePhoto(incoming()) &&
+          incoming().greetingId == greetingId &&
+          incoming().ownerId == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          (
+            exists(/databases/$(database)/documents/greetings/$(greetingId)) ||
+            existsAfter(/databases/$(database)/documents/greetings/$(greetingId))
+          ) &&
+          (
+            isAdmin() ||
+            getAfter(/databases/$(database)/documents/greetings/$(greetingId)).data.ownerId == request.auth.uid
+          )
+        );
+
+        allow update: if (
+          isVerifiedUser() &&
+          isValidId(greetingId) &&
+          isValidId(photoId) &&
+          isValidTreePhoto(incoming()) &&
+          incoming().greetingId == existing().greetingId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'order',
+            'caption',
+            'src',
+            'updatedAt'
+          ]) &&
+          (
+            exists(/databases/$(database)/documents/greetings/$(greetingId)) ||
+            existsAfter(/databases/$(database)/documents/greetings/$(greetingId))
+          ) &&
+          (
+            isAdmin() ||
+            (
+              existing().ownerId == request.auth.uid &&
+              getAfter(/databases/$(database)/documents/greetings/$(greetingId)).data.ownerId == request.auth.uid
+            )
+          )
+        );
+
+        allow delete: if (
+          isVerifiedUser() &&
+          isValidId(greetingId) &&
+          isValidId(photoId) &&
+          exists(/databases/$(database)/documents/greetings/$(greetingId)) &&
+          (
+            get(/databases/$(database)/documents/greetings/$(greetingId)).data.ownerId == request.auth.uid ||
+            isAdmin()
+          )
+        );
+      }
+    }
+
+    match /cards/{cardId} {
+      allow get: if isValidId(cardId);
+      allow list: if isVerifiedUser() && (existing().userId == request.auth.uid || isAdmin());
+
+      allow create: if (
+        isVerifiedUser() &&
+        isValidId(cardId) &&
+        isValidChristmasCard(incoming()) &&
+        incoming().id == cardId &&
+        incoming().userId == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time
+      );
+
+      allow update: if (
+        isVerifiedUser() &&
+        isValidId(cardId) &&
+        isValidChristmasCard(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'recipientName',
+          'senderName',
+          'message',
+          'theme',
+          'voiceStyle',
+          'bgm',
+          'photoCount',
+          'updatedAt'
+        ]) &&
+        (existing().userId == request.auth.uid || isAdmin())
+      );
+
+      allow delete: if (
+        isVerifiedUser() &&
+        isValidId(cardId) &&
+        (existing().userId == request.auth.uid || isAdmin())
+      );
+    }
+
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId) && settingId == 'adminConfig';
+      allow list: if false;
+
+      allow create: if (
+        isVerifiedUser() &&
+        isValidId(settingId) &&
+        settingId == 'adminConfig' &&
+        isValidAdminConfig(incoming()) &&
+        incoming().updatedBy == request.auth.uid &&
+        incoming().updatedAt == request.time
+      );
+
+      allow update: if (
+        isVerifiedUser() &&
+        isValidId(settingId) &&
+        settingId == 'adminConfig' &&
+        isValidAdminConfig(incoming()) &&
+        incoming().updatedBy == request.auth.uid &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'password',
+          'updatedBy',
+          'updatedAt'
+        ])
+      );
+
+      allow delete: if false;
+    }
+
+    match /admins/{adminId} {
+      allow get: if isVerifiedUser() && isValidId(adminId) && (request.auth.uid == adminId || isAdmin());
+      allow list: if false;
+      allow create, update, delete: if false;
+    }
+  }
+}

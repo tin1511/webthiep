@@ -1,0 +1,8 @@
+{
+  "name": "Remix Giáng Sinh An Lành 3D",
+  "description": "Thiệp Giáng Sinh 3D tương tác với hiệu ứng hạt, cây thông Noel treo ảnh kỷ niệm và lưu trữ cấu hình trực tuyến qua Firebase.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
