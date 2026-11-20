@@ -14,6 +14,7 @@ import {
   MailCheck,
   QrCode,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Trash2,
 } from 'lucide-react';
@@ -23,6 +24,7 @@ import {
   WebCardRecord,
   buildCardShareUrl,
   changeCustomerPassword,
+  checkAdminPrivilege,
   deleteCustomerAccountAndData,
   fetchMyOrders,
   fetchMyWebCards,
@@ -39,6 +41,7 @@ import {
 interface AccountPageProps {
   currentUser: User | null;
   onBackHome: () => void;
+  onOpenAdmin?: () => void;
   onOpenCard: (code: string) => void;
   onCreateNewCard: (giftOrderId?: string) => void;
   onShowLegal: () => void;
@@ -48,6 +51,7 @@ interface AccountPageProps {
 export const AccountPage: React.FC<AccountPageProps> = ({
   currentUser,
   onBackHome,
+  onOpenAdmin,
   onOpenCard,
   onCreateNewCard,
   onShowLegal,
@@ -78,8 +82,27 @@ export const AccountPage: React.FC<AccountPageProps> = ({
   const [deletePass, setDeletePass] = useState('');
   const [deletingAcc, setDeletingAcc] = useState(false);
   const [deleteErr, setDeleteErr] = useState('');
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const googleOnly = isGoogleOnlyAccount(currentUser);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setIsAdmin(false);
+      return;
+    }
+    let mounted = true;
+    checkAdminPrivilege(currentUser)
+      .then((res) => {
+        if (mounted) setIsAdmin(res.isAdmin);
+      })
+      .catch(() => {
+        if (mounted) setIsAdmin(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [currentUser?.uid, currentUser?.email, currentUser?.emailVerified]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -424,7 +447,15 @@ export const AccountPage: React.FC<AccountPageProps> = ({
             {/* Thông tin tổng quan tài khoản */}
             <div className="rounded-2xl border border-[#E6BE73]/25 bg-[#1B1512] p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="space-y-1">
-                <p className="text-xs text-[#E6BE73] font-medium m-0">Tài khoản của tôi</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-xs text-[#E6BE73] font-medium m-0">Tài khoản của tôi</p>
+                  {isAdmin && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#E6BE73]/20 border border-[#E6BE73]/40 text-[11px] font-semibold text-[#E6BE73]">
+                      <ShieldCheck className="w-3 h-3" />
+                      <span>Quản trị viên (Admin)</span>
+                    </span>
+                  )}
+                </div>
                 <h1 className="text-2xl font-bold m-0">
                   {currentUser.displayName || currentUser.email || 'Khách hàng'}
                 </h1>
@@ -449,14 +480,27 @@ export const AccountPage: React.FC<AccountPageProps> = ({
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => onCreateNewCard()}
-                className="min-h-[46px] px-5 rounded-xl bg-[#E6BE73] hover:bg-[#F0CC88] text-[#1A1208] text-sm font-semibold inline-flex items-center justify-center gap-2 shrink-0 cursor-pointer"
-              >
-                <Sparkles className="w-4 h-4" />
-                <span>Tạo web thiệp mới</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                {isAdmin && onOpenAdmin && (
+                  <button
+                    type="button"
+                    onClick={onOpenAdmin}
+                    className="min-h-[46px] px-4 rounded-xl border border-[#E6BE73]/50 bg-[#2A2016] hover:bg-[#35281B] text-[#E6BE73] text-sm font-semibold inline-flex items-center justify-center gap-2 shrink-0 cursor-pointer"
+                  >
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>Vào trang Quản trị</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => onCreateNewCard()}
+                  className="min-h-[46px] px-5 rounded-xl bg-[#E6BE73] hover:bg-[#F0CC88] text-[#1A1208] text-sm font-semibold inline-flex items-center justify-center gap-2 shrink-0 cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>Tạo web thiệp mới</span>
+                </button>
+              </div>
             </div>
 
             {/* Danh sách Web thiệp đã tạo */}

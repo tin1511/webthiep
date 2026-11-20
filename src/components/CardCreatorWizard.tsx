@@ -264,6 +264,9 @@ export const CardCreatorWizard: React.FC<CardCreatorWizardProps> = ({
       setSenderName(currentUser.displayName);
     }
     setEditingPhotoIdx(null);
+    if (initialOccasion === 'sinh-nhat') {
+      setPhotos((prev) => (prev.length > 1 ? prev.slice(0, 1) : prev));
+    }
     setErrorMsg('');
   }, [isOpen, initialOccasion, initialTier, freeGiftOrderId]);
 
@@ -400,9 +403,14 @@ export const CardCreatorWizard: React.FC<CardCreatorWizardProps> = ({
 
   const effectivePrice = freeGiftOrderId ? 0 : selectedTierObj.price;
   const allowMediaUpload = tier !== 'basic';
+  const maxPhotos = occasion === 'sinh-nhat' ? 1 : 6;
 
   const handleSelectOccasion = (id: OccasionId) => {
     setOccasion(id);
+    if (id === 'sinh-nhat') {
+      setPhotos((prev) => (prev.length > 1 ? prev.slice(0, 1) : prev));
+      setEditingPhotoIdx((prev) => (prev !== null && prev >= 1 ? null : prev));
+    }
     const pair = OCCASION_HEADLINES[id] || ['Chúc Mừng', 'Giáng Sinh'];
     setHeadline1(pair[0]);
     setHeadline2(pair[1]);
@@ -443,7 +451,7 @@ export const CardCreatorWizard: React.FC<CardCreatorWizardProps> = ({
         );
         setEditingPhotoIdx(replaceIndex);
       } else {
-        const remainingSlots = Math.max(0, 6 - photos.length);
+        const remainingSlots = Math.max(0, maxPhotos - photos.length);
         const selected = files.slice(0, remainingSlots);
         const newItems: DraftPhotoItem[] = [];
         for (let i = 0; i < selected.length; i++) {
@@ -460,8 +468,8 @@ export const CardCreatorWizard: React.FC<CardCreatorWizardProps> = ({
           });
         }
         const firstNewIdx = photos.length;
-        setPhotos((prev) => [...prev, ...newItems].slice(0, 6));
-        if (newItems.length > 0 && firstNewIdx < 6) {
+        setPhotos((prev) => [...prev, ...newItems].slice(0, maxPhotos));
+        if (newItems.length > 0 && firstNewIdx < maxPhotos) {
           setEditingPhotoIdx(firstNewIdx);
         }
       }
@@ -544,7 +552,7 @@ export const CardCreatorWizard: React.FC<CardCreatorWizardProps> = ({
       accentColor,
       bgmId,
       photos: allowMediaUpload
-        ? photos.map((p) => ({ url: p.dataUrl, caption: p.caption }))
+        ? photos.slice(0, maxPhotos).map((p) => ({ url: p.dataUrl, caption: p.caption }))
         : [],
       voiceAudioUrl: allowMediaUpload && voiceDataUrl ? voiceDataUrl : undefined,
       status: 'active',
@@ -566,6 +574,7 @@ export const CardCreatorWizard: React.FC<CardCreatorWizardProps> = ({
       accentColor,
       bgmId,
       allowMediaUpload,
+      maxPhotos,
       photos,
       voiceDataUrl,
     ]
@@ -635,7 +644,7 @@ export const CardCreatorWizard: React.FC<CardCreatorWizardProps> = ({
         accentColor,
         bgmId,
         photos: allowMediaUpload
-          ? photos.map((p) => ({ dataUrl: p.dataUrl, caption: p.caption }))
+          ? photos.slice(0, maxPhotos).map((p) => ({ dataUrl: p.dataUrl, caption: p.caption }))
           : [],
         voiceFile: allowMediaUpload ? voiceFile : null,
         voiceDataUrl: allowMediaUpload ? voiceDataUrl : undefined,
@@ -734,7 +743,7 @@ export const CardCreatorWizard: React.FC<CardCreatorWizardProps> = ({
 
           {freeGiftOrderId && (
             <div className="rounded-xl border border-emerald-500/35 bg-emerald-950/30 p-3.5 text-xs sm:text-sm text-emerald-200">
-              Ưu đãi đơn Set quà <strong className="font-mono">{freeGiftOrderId}</strong>: Tặng kèm miễn phí <strong>0đ Gói Tùy Chỉnh</strong> (tối đa 6 ảnh Polaroid + nhạc + ghi âm giọng nói).
+              Ưu đãi đơn Set quà <strong className="font-mono">{freeGiftOrderId}</strong>: Tặng kèm miễn phí <strong>0đ Gói Tùy Chỉnh</strong> ({occasion === 'sinh-nhat' ? '1 ảnh kỷ niệm trong bức thư' : 'tối đa 6 ảnh Polaroid'} + nhạc + ghi âm giọng nói).
             </div>
           )}
 
@@ -1033,21 +1042,25 @@ export const CardCreatorWizard: React.FC<CardCreatorWizardProps> = ({
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <span className="text-xs font-semibold text-[#E6BE73] block">
-                          Ảnh Polaroid kỷ niệm treo trên mô hình 3D ({photos.length}/6 ảnh)
+                          {occasion === 'sinh-nhat'
+                            ? `Ảnh kỷ niệm trong bức thư (${photos.length}/1 ảnh)`
+                            : `Ảnh Polaroid kỷ niệm treo trên mô hình 3D (${photos.length}/6 ảnh)`}
                         </span>
                         <span className="text-[11px] text-[#A89B8E]">
-                          Bấm vào ảnh hoặc nút Canh chỉnh để kéo vị trí, phóng to &amp; xoay ảnh vuông 1:1
+                          {occasion === 'sinh-nhat'
+                            ? 'Thiệp sinh nhật không đặt ảnh trong bánh kem — chỉ hiển thị 1 ảnh duy nhất bên trong bức thư (bấm để canh chỉnh 1:1)'
+                            : 'Bấm vào ảnh hoặc nút Canh chỉnh để kéo vị trí, phóng to & xoay ảnh vuông 1:1'}
                         </span>
                       </div>
 
-                      {photos.length < 6 && (
+                      {photos.length < maxPhotos && (
                         <label className="min-h-[38px] px-3.5 rounded-lg bg-[#E6BE73] text-[#1A1208] text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer">
                           <ImagePlus className="w-4 h-4" />
                           <span>{processingMedia ? 'Đang xử lý...' : 'Thêm ảnh'}</span>
                           <input
                             type="file"
                             accept="image/*"
-                            multiple
+                            multiple={maxPhotos > 1}
                             disabled={processingMedia}
                             onChange={(e) => {
                               handlePickPhotos(e.target.files, null);
@@ -1266,7 +1279,15 @@ export const CardCreatorWizard: React.FC<CardCreatorWizardProps> = ({
                     {/* Danh sách ảnh đã chọn */}
                     {photos.length === 0 ? (
                       <p className="text-xs text-[#8F8378] m-0">
-                        Chưa có ảnh nào. Hãy bấm <strong>Thêm ảnh</strong> (tối đa 6 ảnh), bạn có thể kéo/xoay/thu phóng từng khung Polaroid ngay bên trong trình tạo.
+                        {occasion === 'sinh-nhat' ? (
+                          <>
+                            Chưa có ảnh nào. Hãy bấm <strong>Thêm ảnh</strong> (chỉ 1 ảnh duy nhất đặt trong bức thư), bạn có thể kéo/xoay/thu phóng khung ảnh ngay bên trong trình tạo.
+                          </>
+                        ) : (
+                          <>
+                            Chưa có ảnh nào. Hãy bấm <strong>Thêm ảnh</strong> (tối đa 6 ảnh), bạn có thể kéo/xoay/thu phóng từng khung Polaroid ngay bên trong trình tạo.
+                          </>
+                        )}
                       </p>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">

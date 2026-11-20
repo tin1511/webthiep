@@ -636,10 +636,23 @@ export interface AdminAccessStatus {
   reason?: string;
 }
 
+export function getConfiguredAdminAllowlist(): string[] {
+  const list = [...CONFIG.adminAllowedEmails, CONFIG.adminEmail]
+    .map((e) => e.replace(/^\[+|\]+$/g, '').trim().toLowerCase())
+    .filter((e) => e && e.includes('@'));
+  return Array.from(new Set(list));
+}
+
 export async function checkAdminPrivilege(user: User | null): Promise<AdminAccessStatus> {
   if (!user) return { isAdmin: false, mustChangePassword: false };
 
   try {
+    const configuredAllowlist = getConfiguredAdminAllowlist();
+    const userEmail = (user.email || '').trim().toLowerCase();
+    const isAllowlistedVerifiedEmail = Boolean(
+      user.emailVerified && userEmail && configuredAllowlist.includes(userEmail)
+    );
+
     const [adminSnap, tokenResult] = await Promise.all([
       getDoc(doc(db, 'admins', user.uid)).catch(() => null),
       user.getIdTokenResult().catch(() => null),
@@ -648,21 +661,18 @@ export async function checkAdminPrivilege(user: User | null): Promise<AdminAcces
     const hasAdminDoc = Boolean(adminSnap && adminSnap.exists());
     const hasAdminClaim = Boolean(tokenResult?.claims?.admin === true);
 
-    if (!hasAdminDoc && !hasAdminClaim) {
+    if (!hasAdminDoc && !hasAdminClaim && !isAllowlistedVerifiedEmail) {
       return {
         isAdmin: false,
         mustChangePassword: false,
-        reason: 'Tài khoản này chưa được cấp quyền trong collection Firestore "admins".',
+        reason: 'Tài khoản này chưa được cấp quyền quản trị viên.',
       };
     }
 
-    // Nếu đăng nhập bằng Google, kiểm tra thêm danh sách allowlist (nếu admin đã cấu hình thật)
+    // Nếu đăng nhập bằng Google với tài khoản không thuộc allowlist đã cấu hình
     const isGoogle = user.providerData.some((p) => p.providerId === 'google.com');
-    const configuredAllowlist = CONFIG.adminAllowedEmails
-      .map((e) => e.replace(/^\[+|\]+$/g, '').trim().toLowerCase())
-      .filter((e) => e && e.includes('@'));
-    if (isGoogle && configuredAllowlist.length > 0 && user.email) {
-      if (!configuredAllowlist.includes(user.email.toLowerCase()) && !hasAdminClaim) {
+    if (isGoogle && configuredAllowlist.length > 0 && userEmail) {
+      if (!configuredAllowlist.includes(userEmail) && !hasAdminClaim && !hasAdminDoc) {
         return {
           isAdmin: false,
           mustChangePassword: false,

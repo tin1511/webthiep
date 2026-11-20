@@ -2,6 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import {
   BookOpen,
+  Camera,
+  CameraOff,
+  Flame,
   Heart,
   Lock,
   Music2,
@@ -11,6 +14,7 @@ import {
   Sparkles,
   Volume2,
   VolumeX,
+  Wind,
   X,
 } from 'lucide-react';
 import { CONFIG, OccasionId } from '../config';
@@ -169,6 +173,19 @@ function buildEnvelopeTargets(N: number, outPos: Float32Array, outCol: Float32Ar
   }
 }
 
+const BIRTHDAY_CAKE_END_RATIO = 0.58;
+const BIRTHDAY_CANDLE_END_RATIO = 0.8;
+
+function isBirthdayCandleIndex(i: number, N: number): boolean {
+  const start = Math.floor(N * BIRTHDAY_CAKE_END_RATIO);
+  const end = Math.floor(N * BIRTHDAY_CANDLE_END_RATIO);
+  return i >= start && i < end;
+}
+
+function isBirthdayCandleFlameIndex(i: number, N: number): boolean {
+  return isBirthdayCandleIndex(i, N) && Math.floor(i / 3) % 3 === 0;
+}
+
 function buildStage3Targets(
   occasion: OccasionId,
   accentHex: string,
@@ -295,8 +312,8 @@ function buildStage3Targets(
         setHex(i, rnd() < 0.5 ? '#facc15' : '#fda4af');
       }
     } else {
-      // Sinh nhật: Bánh kem 2 tầng & ánh nến lung linh
-      if (i < N * 0.58) {
+      // Sinh nhật: Bánh kem 2 tầng & 3 ngọn nến lung linh
+      if (i < Math.floor(N * BIRTHDAY_CAKE_END_RATIO)) {
         const isTop = i % 3 === 0;
         const angle = rnd() * 6.283;
         const rad = (isTop ? 2.1 : 3.2) * (0.72 + 0.28 * rnd());
@@ -306,14 +323,19 @@ function buildStage3Targets(
         z = Math.sin(angle) * rad;
         y = heightOffset + layerY;
         setHex(i, isTop ? '#f9a8d4' : '#fde68a');
-      } else if (i < N * 0.8) {
+      } else if (isBirthdayCandleIndex(i, N)) {
         const candleIdx = (i % 3) - 1;
         const a = rnd() * 6.283;
-        const isFlame = i % 4 === 0;
-        x = candleIdx * 0.95 + Math.cos(a) * (isFlame ? 0.12 : 0.14);
-        z = Math.sin(a) * (isFlame ? 0.12 : 0.14);
-        y = isFlame ? 2.9 + rnd() * 0.65 : 1.45 + rnd() * 1.4;
-        setHex(i, isFlame ? '#ffd98a' : '#fff7ec');
+        const isFlame = isBirthdayCandleFlameIndex(i, N);
+        const flameT = rnd();
+        const flameRad = isFlame ? (1 - flameT * 0.72) * 0.15 : 0.14;
+        x = candleIdx * 0.95 + Math.cos(a) * flameRad;
+        z = Math.sin(a) * flameRad;
+        y = isFlame ? 2.88 + flameT * 0.78 : 1.45 + rnd() * 1.4;
+        setHex(
+          i,
+          isFlame ? (flameT < 0.35 ? '#fff7d6' : flameT < 0.7 ? '#ffd98a' : '#ff8c42') : '#fff7ec'
+        );
       } else {
         const a = rnd() * 6.283;
         const phi = Math.acos(1 - 2 * rnd());
@@ -375,6 +397,13 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
   const [noBtnPos, setNoBtnPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [noAttempts, setNoAttempts] = useState<number>(0);
 
+  // Thổi nến sinh nhật bằng camera ẩn (không hiển thị khuôn mặt)
+  const [candlesBlownOut, setCandlesBlownOut] = useState<boolean>(false);
+  const [blowLevel, setBlowLevel] = useState<number>(0);
+  const [camStatus, setCamStatus] = useState<
+    'idle' | 'requesting' | 'active' | 'denied' | 'unsupported'
+  >('idle');
+
   const fullLetterJoined = useMemo(() => letterParagraphs.join('\n\n'), [letterParagraphs]);
   const totalLetterChars = fullLetterJoined.length;
 
@@ -417,9 +446,16 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
   const stageRef = useRef<CardStage>(0);
   const toTinhAcceptedRef = useRef<boolean>(false);
   const goStageRef = useRef<((s: CardStage) => void) | null>(null);
+  const blowVideoRef = useRef<HTMLVideoElement | null>(null);
+  const camStreamRef = useRef<MediaStream | null>(null);
+  const blowLoopRef = useRef<number>(0);
+  const candlesBlownOutRef = useRef<boolean>(false);
+  const blownOutAtRef = useRef<number>(0);
+  const blowLevelRef = useRef<number>(0);
 
   stageRef.current = stage;
   toTinhAcceptedRef.current = toTinhAccepted;
+  candlesBlownOutRef.current = candlesBlownOut;
 
   // Nhạc nền không bản quyền hoặc link tự chọn
   useEffect(() => {
@@ -605,15 +641,18 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
     const disposableGeos: THREE.BufferGeometry[] = [geo, sg];
     const disposableMats: THREE.Material[] = [pm, sm];
 
+    // Thiệp sinh nhật không treo/đặt ảnh trong bánh kem 3D; ảnh kỷ niệm duy nhất hiển thị trong bức thư
     const photoList: WebCardPhoto[] =
-      card.photos && card.photos.length > 0
-        ? card.photos
-        : [
-            {
-              url: '',
-              caption: card.greeting.replace(/\n/g, ' · '),
-            },
-          ];
+      card.occasion === 'sinh-nhat'
+        ? []
+        : card.photos && card.photos.length > 0
+          ? card.photos
+          : [
+              {
+                url: '',
+                caption: card.greeting.replace(/\n/g, ' · '),
+              },
+            ];
 
     const photoGroups: THREE.Group[] = [];
     const picMeshes: THREE.Object3D[] = [];
@@ -840,6 +879,11 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
       const wob = prefersReducedMotion ? 0 : 0.03;
       const isHeartBeat = card.occasion === 'valentine' && curStage === 3 && !prefersReducedMotion;
       const beat = isHeartBeat ? 1 + Math.sin(t * 3.1) * 0.05 : 1;
+      const isBirthdayStage3 = card.occasion === 'sinh-nhat' && curStage === 3;
+      const blownElapsed = candlesBlownOutRef.current
+        ? Math.max(0, now - blownOutAtRef.current)
+        : 0;
+      const blowNorm = Math.min(1, blowLevelRef.current / 100);
 
       for (let i = 0; i < N; i++) {
         const j = i * 3;
@@ -847,6 +891,13 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
         let tx: number;
         let ty: number;
         let tz: number;
+        let targetR = tc[j];
+        let targetG = tc[j + 1];
+        let targetB = tc[j + 2];
+
+        const isBirthdayFlame = isBirthdayStage3 && isBirthdayCandleFlameIndex(i, N);
+        const isBirthdayStick =
+          isBirthdayStage3 && isBirthdayCandleIndex(i, N) && !isBirthdayFlame;
 
         if (curStage === 0 || !tp) {
           const a = seed[s] * 6.283 + t * (0.2 + seed[s + 1] * 0.3);
@@ -855,22 +906,55 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
           tx = r * Math.sin(b) * Math.cos(a);
           ty = r * Math.cos(b) * 0.7;
           tz = r * Math.sin(b) * Math.sin(a);
+        } else if (isBirthdayFlame && candlesBlownOutRef.current) {
+          // Khi người dùng thổi: cả 3 ngọn nến hóa thành làn khói nhẹ bay lên rồi tắt hẳn
+          const puff = Math.min(2.4, blownElapsed);
+          const curl = seed[s] * 6.283;
+          tx = tp[j] + Math.sin(t * 4.5 + curl) * (0.12 + puff * 0.32);
+          ty = tp[j + 1] + puff * (1.25 + seed[s + 1] * 0.9);
+          tz = tp[j + 2] + Math.cos(t * 3.8 + curl) * (0.1 + puff * 0.28);
+          const smokeFade = Math.max(0, 1 - blownElapsed / 1.45);
+          targetR = 0.55 * smokeFade;
+          targetG = 0.62 * smokeFade;
+          targetB = 0.72 * smokeFade;
+        } else if (isBirthdayFlame) {
+          // Cả 3 ngọn nến đang cháy: bập bùng tự nhiên, nghiêng mạnh khi cảm nhận hơi thổi
+          const sway = blowNorm * 0.55;
+          tx =
+            tp[j] +
+            Math.sin(t * 9.5 + i * 0.6) * (0.045 + sway * 0.14) +
+            sway * (0.28 + Math.sin(t * 14) * 0.1);
+          ty = tp[j + 1] + Math.sin(t * 12.2 + i * 0.9) * 0.07 - sway * 0.14;
+          tz = tp[j + 2] + Math.cos(t * 8.7 + i * 0.5) * (0.045 + sway * 0.1);
         } else {
           tx = tp[j] * beat + Math.sin(t * 1.7 + i) * wob;
           ty = tp[j + 1] * beat + Math.cos(t * 1.3 + i) * wob;
           tz = tp[j + 2] * beat;
+          if (isBirthdayStick && candlesBlownOutRef.current) {
+            targetR *= 0.52;
+            targetG *= 0.52;
+            targetB *= 0.56;
+          }
         }
 
         const k = prefersReducedMotion
           ? 1
-          : 1 - Math.exp(-dt * (curStage === 0 ? 1.2 : 1.6 + seed[s + 1] * 3));
+          : 1 -
+            Math.exp(
+              -dt *
+                (curStage === 0
+                  ? 1.2
+                  : isBirthdayFlame
+                    ? 6.5
+                    : 1.6 + seed[s + 1] * 3)
+            );
         pos[j] += (tx - pos[j]) * k;
         pos[j + 1] += (ty - pos[j + 1]) * k;
         pos[j + 2] += (tz - pos[j + 2]) * k;
 
-        col[j] += (tc[j] - col[j]) * k;
-        col[j + 1] += (tc[j + 1] - col[j + 1]) * k;
-        col[j + 2] += (tc[j + 2] - col[j + 2]) * k;
+        col[j] += (targetR - col[j]) * k;
+        col[j + 1] += (targetG - col[j + 1]) * k;
+        col[j + 2] += (targetB - col[j + 2]) * k;
       }
 
       geo.attributes.position.needsUpdate = true;
@@ -976,6 +1060,187 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
     }
   };
 
+  const stopHiddenCamera = () => {
+    if (blowLoopRef.current) {
+      window.clearInterval(blowLoopRef.current);
+      blowLoopRef.current = 0;
+    }
+    if (camStreamRef.current) {
+      camStreamRef.current.getTracks().forEach((track) => track.stop());
+      camStreamRef.current = null;
+    }
+    if (blowVideoRef.current) {
+      blowVideoRef.current.srcObject = null;
+    }
+    blowLevelRef.current = 0;
+    setBlowLevel(0);
+    setCamStatus((prev) => (prev === 'denied' || prev === 'unsupported' ? prev : 'idle'));
+  };
+
+  const extinguishCandles = () => {
+    if (candlesBlownOutRef.current) return;
+    blownOutAtRef.current = performance.now() / 1000;
+    candlesBlownOutRef.current = true;
+    setCandlesBlownOut(true);
+    stopHiddenCamera();
+  };
+
+  const startHiddenCamera = async () => {
+    if (card.occasion !== 'sinh-nhat' || candlesBlownOutRef.current) return;
+    if (
+      typeof navigator === 'undefined' ||
+      !navigator.mediaDevices ||
+      typeof navigator.mediaDevices.getUserMedia !== 'function'
+    ) {
+      setCamStatus('unsupported');
+      return;
+    }
+
+    stopHiddenCamera();
+    setCamStatus('requesting');
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'user',
+          width: { ideal: 320 },
+          height: { ideal: 240 },
+        },
+        audio: false,
+      });
+
+      camStreamRef.current = stream;
+      const video = blowVideoRef.current;
+      if (!video) {
+        stream.getTracks().forEach((t) => t.stop());
+        camStreamRef.current = null;
+        setCamStatus('idle');
+        return;
+      }
+
+      video.srcObject = stream;
+      await video.play().catch(() => {});
+      setCamStatus('active');
+
+      // Phân tích khung hình ẩn (96x72) để nhận diện cử chỉ thổi vùng miệng mà không hiển thị khuôn mặt
+      const W = 96;
+      const H = 72;
+      const analysisCanvas = document.createElement('canvas');
+      analysisCanvas.width = W;
+      analysisCanvas.height = H;
+      const ctx = analysisCanvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+
+      const prevLuma = new Float32Array(W * H);
+      let warmupFrames = 0;
+      let progress = 0;
+
+      blowLoopRef.current = window.setInterval(() => {
+        if (candlesBlownOutRef.current || !blowVideoRef.current || blowVideoRef.current.readyState < 2) {
+          return;
+        }
+
+        ctx.drawImage(blowVideoRef.current, 0, 0, W, H);
+        const data = ctx.getImageData(0, 0, W, H).data;
+
+        let mouthDiffSum = 0;
+        let mouthActivePixels = 0;
+        let mouthTotalPixels = 0;
+        let outerDiffSum = 0;
+        let outerTotalPixels = 0;
+
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) {
+            const p = y * W + x;
+            const idx = p * 4;
+            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            const diff = Math.abs(luma - prevLuma[p]);
+            prevLuma[p] = luma;
+
+            const inMouthZone = x >= 26 && x <= 70 && y >= 32 && y <= 64;
+            if (inMouthZone) {
+              mouthDiffSum += diff;
+              if (diff > 9) mouthActivePixels++;
+              mouthTotalPixels++;
+            } else if (x < 18 || x > 78 || y < 14) {
+              outerDiffSum += diff;
+              outerTotalPixels++;
+            }
+          }
+        }
+
+        warmupFrames++;
+        if (warmupFrames <= 7) return;
+
+        const mouthMotion = mouthTotalPixels > 0 ? mouthDiffSum / mouthTotalPixels : 0;
+        const mouthActiveRatio = mouthTotalPixels > 0 ? mouthActivePixels / mouthTotalPixels : 0;
+        const outerMotion = outerTotalPixels > 0 ? outerDiffSum / outerTotalPixels : 0;
+
+        // Tập trung chuyển động vùng miệng/hơi thổi phía trước camera và tránh nhiễu rung cả khung hình lớn
+        const isBlowingGesture =
+          mouthMotion > 5.0 &&
+          mouthActiveRatio > 0.055 &&
+          outerMotion < 28 &&
+          mouthMotion >= outerMotion * 0.85;
+
+        if (isBlowingGesture) {
+          const focusRatio = Math.min(2.2, mouthMotion / Math.max(2.5, outerMotion));
+          const gain = Math.min(18, (mouthMotion - 4.2) * 1.45 * Math.max(0.85, focusRatio));
+          progress = Math.min(100, progress + gain);
+        } else {
+          progress = Math.max(0, progress - 4.2);
+        }
+
+        blowLevelRef.current = progress;
+        setBlowLevel(Math.round(progress));
+
+        if (progress >= 100) {
+          extinguishCandles();
+        }
+      }, 65);
+    } catch {
+      setCamStatus('denied');
+    }
+  };
+
+  const relightCandles = () => {
+    candlesBlownOutRef.current = false;
+    setCandlesBlownOut(false);
+    blowLevelRef.current = 0;
+    setBlowLevel(0);
+    if (!isPreview) {
+      startHiddenCamera();
+    }
+  };
+
+  // Tự động mở camera ẩn (không hiện mặt) khi vào màn bánh kem sinh nhật (Stage 3)
+  useEffect(() => {
+    if (
+      card.occasion !== 'sinh-nhat' ||
+      stage !== 3 ||
+      isPreview ||
+      isLocked ||
+      isExpired ||
+      isPendingApproval ||
+      candlesBlownOut
+    ) {
+      if (stage !== 3) stopHiddenCamera();
+      return;
+    }
+
+    startHiddenCamera();
+    return () => {
+      stopHiddenCamera();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [card.occasion, stage, isPreview, isLocked, isExpired, isPendingApproval]);
+
+  useEffect(() => {
+    return () => {
+      stopHiddenCamera();
+    };
+  }, []);
+
   // Trạng thái bị khóa hoặc từ chối duyệt
   if (isLocked) {
     return (
@@ -1054,12 +1319,27 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
     );
   }
 
+  const birthdayLetterPhoto =
+    card.occasion === 'sinh-nhat' ? card.photos?.find((p) => Boolean(p?.url)) || null : null;
+
   return (
     <div
       className={`${
         isPreview ? 'h-[560px] rounded-2xl border border-[#E6BE73]/25' : 'fixed inset-0'
       } bg-[#0b1622] text-[#F7F1E8] flex flex-col overflow-hidden select-none`}
     >
+      {/* Video camera ẩn hoàn toàn (không hiển thị khuôn mặt lên màn hình) dùng để phát hiện thổi nến sinh nhật */}
+      {card.occasion === 'sinh-nhat' && (
+        <video
+          ref={blowVideoRef}
+          playsInline
+          muted
+          autoPlay
+          aria-hidden="true"
+          className="fixed -left-[9999px] -top-[9999px] w-px h-px opacity-0 pointer-events-none"
+        />
+      )}
+
       {/* Không gian 3D toàn màn hình chuẩn tin1511/noelnt — link riêng chỉ hiện thiệp */}
       <div className="relative flex-1 min-h-0">
         <div ref={canvasMountRef} className="absolute inset-0 cursor-grab active:cursor-grabbing" />
@@ -1144,9 +1424,91 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
           )}
 
           {stage === 3 && stageUiReady && (
-            <div className="animate-card-fade-up pointer-events-auto flex flex-col items-center gap-2.5">
+            <div className="animate-card-fade-up pointer-events-auto flex flex-col items-center gap-2.5 w-full max-w-sm">
+              {card.occasion === 'sinh-nhat' && (
+                <div className="w-full rounded-2xl border border-[#ffd98a]/30 bg-[#08101a]/88 px-4 py-2.5 space-y-2 backdrop-blur-sm">
+                  {!candlesBlownOut ? (
+                    <>
+                      <div className="flex items-center justify-center gap-1.5 text-[11px] sm:text-xs text-[#ffd98a] font-medium">
+                        {camStatus === 'active' ? (
+                          <Camera className="w-3.5 h-3.5 shrink-0" />
+                        ) : (
+                          <CameraOff className="w-3.5 h-3.5 shrink-0 text-[#cbd5e1]" />
+                        )}
+                        <span>
+                          {camStatus === 'active'
+                            ? 'Camera đang bật ẩn (không hiện mặt) · Hãy thổi để tắt nến'
+                            : camStatus === 'requesting'
+                              ? 'Đang bật camera ẩn để nhận diện hơi thổi...'
+                              : camStatus === 'denied' || camStatus === 'unsupported'
+                                ? 'Chưa bật được camera · Bấm nút bên dưới để thổi nến'
+                                : 'Bật camera ẩn (không hiện mặt) để thổi tắt nến'}
+                        </span>
+                      </div>
+
+                      {camStatus === 'active' && (
+                        <div className="w-full h-1.5 rounded-full bg-[#1e293b] overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-[#ffd98a] to-[#ff8c42] transition-all duration-75"
+                            style={{ width: `${Math.max(4, blowLevel)}%` }}
+                          />
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap items-center justify-center gap-2">
+                        {camStatus !== 'active' && camStatus !== 'requesting' && (
+                          <button
+                            type="button"
+                            onClick={startHiddenCamera}
+                            className="min-h-[34px] px-3.5 rounded-full border border-[#ffd98a]/40 bg-[#111E2D] hover:bg-[#192b40] text-[#ffd98a] text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Camera className="w-3.5 h-3.5" />
+                            <span>Mở camera thổi nến</span>
+                          </button>
+                        )}
+                        {camStatus === 'active' && (
+                          <button
+                            type="button"
+                            onClick={stopHiddenCamera}
+                            className="min-h-[34px] px-3 rounded-full border border-white/15 bg-[#111E2D] text-[#cbd5e1] text-[11px] cursor-pointer"
+                          >
+                            Tắt cam
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={extinguishCandles}
+                          className="min-h-[34px] px-3.5 rounded-full border border-[#ffd98a]/35 bg-[#1a1208]/80 hover:bg-[#2a1d0d] text-[#fff7ec] text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Wind className="w-3.5 h-3.5 text-[#ffd98a]" />
+                          <span>Thổi nến ngay</span>
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs text-[#ffd98a] font-medium">
+                        Nến đã tắt — ước một điều thật đẹp nhé!
+                      </span>
+                      <button
+                        type="button"
+                        onClick={relightCandles}
+                        className="min-h-[32px] px-3 rounded-full border border-[#ffd98a]/40 bg-[#111E2D] hover:bg-[#192b40] text-[#ffd98a] text-[11px] font-medium inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <Flame className="w-3.5 h-3.5" />
+                        <span>Thắp lại nến</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <p className="text-xs sm:text-sm text-[#e2e8f0] opacity-75 m-0">
-                Kéo để xoay · chạm vào ảnh để xem
+                {card.occasion === 'sinh-nhat'
+                  ? birthdayLetterPhoto
+                    ? 'Kéo để xoay bánh kem · mở thư để xem ảnh kỷ niệm'
+                    : 'Kéo để xoay bánh kem'
+                  : 'Kéo để xoay · chạm vào ảnh để xem'}
               </p>
               <button
                 type="button"
@@ -1203,11 +1565,18 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
                       </div>
                       <Heart className="w-4 h-4 text-[#b83b4a] shrink-0" />
                     </div>
-                    <div className="mt-3 space-y-2">
-                      <div className="h-2.5 w-4/5 rounded bg-[#e8d5be]" />
-                      <div className="h-2.5 w-full rounded bg-[#efe0cd]" />
-                      <div className="h-2.5 w-3/4 rounded bg-[#e8d5be]" />
-                      <div className="h-2.5 w-5/6 rounded bg-[#efe0cd]" />
+                    <div className="mt-3 flex items-start gap-3">
+                      {birthdayLetterPhoto && (
+                        <div className="w-14 h-16 shrink-0 rounded-sm bg-white p-1 pb-2.5 border border-[#e2ceb5] shadow-sm -rotate-2">
+                          <div className="w-full h-full bg-[#e8d5be] rounded-[1px]" />
+                        </div>
+                      )}
+                      <div className="flex-1 space-y-2">
+                        <div className="h-2.5 w-4/5 rounded bg-[#e8d5be]" />
+                        <div className="h-2.5 w-full rounded bg-[#efe0cd]" />
+                        <div className="h-2.5 w-3/4 rounded bg-[#e8d5be]" />
+                        <div className="h-2.5 w-5/6 rounded bg-[#efe0cd]" />
+                      </div>
                     </div>
                     <div className="mt-4 text-right text-xs italic text-[#7c5c4b]">
                       {card.senderName}
@@ -1259,19 +1628,23 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
             /* GIAI ĐOẠN 3: BỨC THƯ ĐÃ ĐƯỢC LẤY RA NGOÀI & TỪNG CHỮ HIỆN LÊN */
             <div
               key={`letter-read-${replayLetterKey}`}
-              className="animate-letter-pullout my-auto w-full max-w-[560px] rounded-md bg-[#fff7ec] text-[#2a1a1c] p-6 sm:p-8 shadow-2xl space-y-4 border border-[#e5d2bc]"
+              className={`animate-letter-pullout my-auto w-full ${
+                birthdayLetterPhoto ? 'max-w-[680px]' : 'max-w-[560px]'
+              } rounded-md bg-[#fff7ec] text-[#2a1a1c] p-4 sm:p-6 shadow-2xl space-y-3.5 border border-[#e5d2bc]`}
             >
-              <div className="border-b border-[#d9c3b8] pb-3 flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-xs font-medium text-[#7c5c4b]">Thư gửi</div>
-                  <div className="text-lg font-bold text-[#2a1a1c]">{effectiveRecipient}</div>
+              <div className="border-b border-[#d9c3b8] pb-2.5 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[11px] font-medium text-[#7c5c4b]">Thư gửi</div>
+                  <div className="text-base sm:text-lg font-bold text-[#2a1a1c] truncate">
+                    {effectiveRecipient}
+                  </div>
                 </div>
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
                     onClick={() => setReplayLetterKey((k) => k + 1)}
                     title="Xem lại hiệu ứng mở phong thư & từng chữ hiện lên"
-                    className="min-h-[36px] px-2.5 rounded-full bg-[#f5e6d3] hover:bg-[#ecd8be] text-[#5c3a28] text-xs font-medium inline-flex items-center gap-1 cursor-pointer"
+                    className="min-h-[34px] px-2.5 rounded-full bg-[#f5e6d3] hover:bg-[#ecd8be] text-[#5c3a28] text-xs font-medium inline-flex items-center gap-1 cursor-pointer"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
                     <span className="hidden sm:inline">Mở lại thư</span>
@@ -1280,7 +1653,7 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
                     type="button"
                     onClick={() => setLetterModalOpen(false)}
                     aria-label="Đóng lá thư"
-                    className="min-h-[38px] min-w-[38px] rounded-full bg-[#f5e6d3] text-[#2a1a1c] flex items-center justify-center cursor-pointer"
+                    className="min-h-[34px] min-w-[34px] rounded-full bg-[#f5e6d3] text-[#2a1a1c] flex items-center justify-center cursor-pointer"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -1288,7 +1661,7 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
               </div>
 
               {card.voiceAudioUrl && (
-                <div className="rounded-lg border border-[#d9c3b8] bg-[#f7ecdc] p-3 flex items-center justify-between gap-3">
+                <div className="rounded-lg border border-[#d9c3b8] bg-[#f7ecdc] p-2.5 sm:p-3 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2 min-w-0">
                     <Music2 className="w-4 h-4 text-[#9a3412] shrink-0" />
                     <div className="text-xs text-[#2a1a1c] truncate">
@@ -1298,7 +1671,7 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
                   <button
                     type="button"
                     onClick={toggleVoiceAudio}
-                    className="min-h-[36px] px-3.5 rounded-full bg-[#ffd98a] text-[#1a1208] text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+                    className="min-h-[34px] px-3.5 rounded-full bg-[#ffd98a] text-[#1a1208] text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
                   >
                     {voicePlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
                     <span>{voicePlaying ? 'Tạm dừng' : 'Nghe'}</span>
@@ -1306,58 +1679,97 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
                 </div>
               )}
 
-              {/* Nội dung bức thư hiện lên từng chữ (Chạm vào nội dung để hiện toàn bộ ngay nếu muốn) */}
               <div
-                onClick={() => {
-                  if (typedCharCount < totalLetterChars) {
-                    setTypedCharCount(totalLetterChars);
-                  }
-                }}
-                title={
-                  typedCharCount < totalLetterChars
-                    ? 'Chạm vào thư để hiện toàn bộ chữ ngay'
-                    : undefined
+                className={
+                  birthdayLetterPhoto
+                    ? 'flex flex-col min-[440px]:flex-row items-center min-[440px]:items-stretch gap-4 sm:gap-5'
+                    : 'space-y-3'
                 }
-                className="space-y-3.5 text-[1rem] leading-[1.85] text-[#2a1a1c] min-h-[120px] cursor-pointer"
               >
-                {(() => {
-                  let consumed = 0;
-                  return letterParagraphs.map((para, idx) => {
-                    const start = consumed;
-                    const end = start + para.length;
-                    consumed = end + 2; // +2 cho '\n\n' giữa các đoạn
-                    if (typedCharCount <= start && idx > 0) return null;
-                    const visibleLen = Math.max(0, Math.min(para.length, typedCharCount - start));
-                    const visibleText = para.slice(0, visibleLen);
-                    const isCurrentTypingPara =
-                      typedCharCount < totalLetterChars &&
-                      typedCharCount >= start &&
-                      typedCharCount <= end;
+                {birthdayLetterPhoto && (
+                  <div className="shrink-0 flex items-center justify-center">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setLightboxPhoto({
+                          url: birthdayLetterPhoto.url,
+                          caption: birthdayLetterPhoto.caption,
+                        })
+                      }
+                      title="Bấm để phóng to ảnh"
+                      className="group bg-white p-2 pb-2.5 rounded-sm shadow-md border border-[#e2ceb5] -rotate-1 hover:rotate-0 transition-transform cursor-pointer text-center w-[150px] sm:w-[184px]"
+                    >
+                      <img
+                        src={birthdayLetterPhoto.url}
+                        alt={birthdayLetterPhoto.caption || 'Ảnh kỷ niệm sinh nhật'}
+                        className="w-full aspect-square object-cover rounded-[2px] block"
+                      />
+                      {birthdayLetterPhoto.caption && (
+                        <span className="mt-1.5 block text-[11px] font-medium text-[#5c3a28] truncate">
+                          {birthdayLetterPhoto.caption}
+                        </span>
+                      )}
+                    </button>
+                  </div>
+                )}
 
-                    return (
-                      <p key={idx} className="m-0 whitespace-pre-line">
-                        {visibleText}
-                        {isCurrentTypingPara && (
-                          <span className="animate-caret-blink inline-block ml-0.5 w-[2px] h-[1.05em] align-middle bg-[#8c4a27]" />
-                        )}
-                      </p>
-                    );
-                  });
-                })()}
+                <div className="flex-1 min-w-0 w-full flex flex-col justify-between gap-3">
+                  {/* Nội dung bức thư hiện lên từng chữ (Chạm vào nội dung để hiện toàn bộ ngay nếu muốn) */}
+                  <div
+                    onClick={() => {
+                      if (typedCharCount < totalLetterChars) {
+                        setTypedCharCount(totalLetterChars);
+                      }
+                    }}
+                    title={
+                      typedCharCount < totalLetterChars
+                        ? 'Chạm vào thư để hiện toàn bộ chữ ngay'
+                        : undefined
+                    }
+                    className={`space-y-2.5 text-[0.95rem] sm:text-[1rem] leading-[1.75] text-[#2a1a1c] cursor-pointer ${
+                      birthdayLetterPhoto ? 'min-h-[48px]' : 'min-h-[96px]'
+                    }`}
+                  >
+                    {(() => {
+                      let consumed = 0;
+                      return letterParagraphs.map((para, idx) => {
+                        const start = consumed;
+                        const end = start + para.length;
+                        consumed = end + 2; // +2 cho '\n\n' giữa các đoạn
+                        if (typedCharCount <= start && idx > 0) return null;
+                        const visibleLen = Math.max(0, Math.min(para.length, typedCharCount - start));
+                        const visibleText = para.slice(0, visibleLen);
+                        const isCurrentTypingPara =
+                          typedCharCount < totalLetterChars &&
+                          typedCharCount >= start &&
+                          typedCharCount <= end;
+
+                        return (
+                          <p key={idx} className="m-0 whitespace-pre-line">
+                            {visibleText}
+                            {isCurrentTypingPara && (
+                              <span className="animate-caret-blink inline-block ml-0.5 w-[2px] h-[1.05em] align-middle bg-[#8c4a27]" />
+                            )}
+                          </p>
+                        );
+                      });
+                    })()}
+                  </div>
+
+                  {/* Chữ ký người gửi hiện lên mượt mà sau khi viết xong nội dung thư */}
+                  <div
+                    className={`pt-1 text-right italic text-[1rem] font-semibold text-[#5c3a28] transition-all duration-500 ${
+                      typedCharCount >= totalLetterChars
+                        ? 'opacity-100 translate-y-0'
+                        : 'opacity-0 translate-y-2'
+                    }`}
+                  >
+                    {card.senderName}
+                  </div>
+                </div>
               </div>
 
-              {/* Chữ ký người gửi hiện lên mượt mà sau khi viết xong nội dung thư */}
-              <div
-                className={`pt-2 text-right italic text-[1.05rem] font-semibold text-[#5c3a28] transition-all duration-500 ${
-                  typedCharCount >= totalLetterChars
-                    ? 'opacity-100 translate-y-0'
-                    : 'opacity-0 translate-y-2'
-                }`}
-              >
-                {card.senderName}
-              </div>
-
-              <div className="pt-2 flex items-center justify-between gap-3">
+              <div className="pt-2 border-t border-[#d9c3b8]/70 flex items-center justify-between gap-3">
                 {typedCharCount < totalLetterChars ? (
                   <button
                     type="button"
@@ -1366,13 +1778,15 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
                   >
                     Hiện toàn bộ chữ ngay
                   </button>
+                ) : birthdayLetterPhoto ? (
+                  <span className="text-[11px] text-[#7c5c4b]">Chạm vào ảnh để phóng to</span>
                 ) : (
                   <span />
                 )}
                 <button
                   type="button"
                   onClick={() => setLetterModalOpen(false)}
-                  className="min-h-[42px] px-6 rounded-full bg-[#ffd98a] text-[#1a1208] text-sm font-semibold cursor-pointer"
+                  className="min-h-[38px] px-5 rounded-full bg-[#ffd98a] hover:bg-[#ffe5aa] text-[#1a1208] text-sm font-semibold cursor-pointer"
                 >
                   Đóng
                 </button>

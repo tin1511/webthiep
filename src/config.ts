@@ -67,9 +67,9 @@ export const CONFIG = {
 
   // 2. CẤU HÌNH QUẢN TRỊ VIÊN (/admin) - KHÔNG BAO GIỜ LƯU MẬT KHẨU TRONG CODE
   // Thay '[EMAIL_ADMIN_CUA_BAN]' bằng email bạn tạo cho tài khoản "admin" trong Firebase Console -> Authentication
-  adminEmail: '[lettersdtd@gmail.com]',
+  adminEmail: 'lettersdtd@gmail.com',
   // Danh sách email Google được phép vào /admin (bên cạnh tài khoản có document trong Firestore collection "admins/<UID>")
-  adminAllowedEmails: ['[lettersdtd@gmail.com]'],
+  adminAllowedEmails: ['lettersdtd@gmail.com'],
   adminMaxFailedAttempts: 5,
   adminLockoutMs: 5 * 60 * 1000, // Khóa 5 phút sau 5 lần đăng nhập sai liên tiếp
 

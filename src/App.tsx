@@ -22,6 +22,7 @@ import {
   ShopOrderRecord,
   WebCardRecord,
   auth,
+  checkAdminPrivilege,
   consumePendingGoogleRedirect,
   fetchGiftSets,
   fetchPricingTiers,
@@ -58,6 +59,7 @@ export default function App() {
     parseLocationPath(typeof window !== 'undefined' ? window.location.pathname : '/')
   );
   const [currentUser, setCurrentUser] = useState<User | null>(auth.currentUser);
+  const [isAdminUser, setIsAdminUser] = useState<boolean>(false);
   const [activeOccasion, setActiveOccasion] = useState<OccasionId>('noel');
   const [openFaqId, setOpenFaqId] = useState<string>(CONFIG.faqs[0]?.id || '');
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
@@ -117,6 +119,13 @@ export default function App() {
     consumePendingGoogleRedirect();
     const unsub = onAuthStateChanged(auth, (u) => {
       setCurrentUser(u);
+      if (!u) {
+        setIsAdminUser(false);
+        return;
+      }
+      checkAdminPrivilege(u)
+        .then((res) => setIsAdminUser(res.isAdmin))
+        .catch(() => setIsAdminUser(false));
     });
     return () => unsub();
   }, []);
@@ -216,6 +225,7 @@ export default function App() {
         <AccountPage
           currentUser={currentUser}
           onBackHome={() => navigateTo('/')}
+          onOpenAdmin={() => navigateTo('/admin')}
           onOpenCard={(code) => navigateTo(`/c/${code}`)}
           onCreateNewCard={(giftOrderId) => {
             navigateTo('/');
@@ -334,6 +344,17 @@ export default function App() {
           </nav>
 
           <div className="flex items-center gap-2 shrink-0">
+            {isAdminUser && (
+              <button
+                type="button"
+                onClick={() => navigateTo('/admin')}
+                className="hidden sm:inline-flex items-center justify-center gap-1.5 min-h-[42px] px-3.5 rounded-xl border border-[#E6BE73]/45 bg-[#2A2016] hover:bg-[#35281B] text-[#E6BE73] text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>Quản trị</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => navigateTo('/tai-khoan')}
@@ -380,6 +401,19 @@ export default function App() {
                 {item.label}
               </button>
             ))}
+            {isAdminUser && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  navigateTo('/admin');
+                }}
+                className="w-full text-left min-h-[44px] px-3 rounded-lg text-sm font-semibold text-[#E6BE73] bg-[#261E16] hover:bg-[#31261B] cursor-pointer flex items-center gap-2"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                <span>Trang Quản trị (/admin)</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
