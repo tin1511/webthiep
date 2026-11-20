@@ -28,6 +28,7 @@ import {
   collection,
   query,
   where,
+  onSnapshot,
   getDocFromServer,
   serverTimestamp,
   Timestamp,
@@ -658,8 +659,8 @@ export async function checkAdminPrivilege(user: User | null): Promise<AdminAcces
     // Nếu đăng nhập bằng Google, kiểm tra thêm danh sách allowlist (nếu admin đã cấu hình thật)
     const isGoogle = user.providerData.some((p) => p.providerId === 'google.com');
     const configuredAllowlist = CONFIG.adminAllowedEmails
-      .map((e) => e.trim().toLowerCase())
-      .filter((e) => e && !e.includes('['));
+      .map((e) => e.replace(/^\[+|\]+$/g, '').trim().toLowerCase())
+      .filter((e) => e && e.includes('@'));
     if (isGoogle && configuredAllowlist.length > 0 && user.email) {
       if (!configuredAllowlist.includes(user.email.toLowerCase()) && !hasAdminClaim) {
         return {
@@ -684,15 +685,15 @@ export async function signInAdminWithUsernameOrEmail(
   usernameOrEmail: string,
   password: string
 ): Promise<{ user: User; status: AdminAccessStatus }> {
-  const raw = usernameOrEmail.trim().toLowerCase();
+  const raw = usernameOrEmail.replace(/^\[+|\]+$/g, '').trim().toLowerCase();
   if (!raw || !password) {
     throw new Error('Thông tin đăng nhập không hợp lệ.');
   }
 
   let resolvedEmail = raw;
   if (raw === 'admin') {
-    const cfgEmail = CONFIG.adminEmail.trim();
-    if (!cfgEmail || cfgEmail.includes('[')) {
+    const cfgEmail = CONFIG.adminEmail.replace(/^\[+|\]+$/g, '').trim();
+    if (!cfgEmail || !cfgEmail.includes('@')) {
       throw new Error(
         'Chưa điền CONFIG.adminEmail trong src/config.ts. Vui lòng tạo tài khoản admin trong Firebase Console và điền email vào CONFIG.adminEmail.'
       );
@@ -787,6 +788,46 @@ export async function isCardCodeAvailable(rawSlug: string): Promise<boolean> {
   }
 }
 
+async function compressDataUrlUnderMaxBytes(
+  dataUrl: string,
+  maxBytes = 280 * 1024
+): Promise<CompressedMediaResult> {
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image();
+    el.onload = () => resolve(el);
+    el.onerror = () => reject(new Error('Không thể đọc dữ liệu ảnh đã chỉnh sửa.'));
+    el.src = dataUrl;
+  });
+
+  let maxDim = 960;
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Trình duyệt không hỗ trợ xử lý ảnh.');
+
+  let chosenBlob: Blob | null = null;
+  for (let pass = 0; pass < 3; pass++) {
+    const ratio = Math.min(1, maxDim / Math.max(img.width, img.height));
+    canvas.width = Math.max(1, Math.round(img.width * ratio));
+    canvas.height = Math.max(1, Math.round(img.height * ratio));
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+    for (const quality of [0.85, 0.72, 0.6, 0.48, 0.36]) {
+      const blob = await canvasToBlobPromise(canvas, quality);
+      chosenBlob = blob;
+      if (blob.size <= maxBytes) {
+        const outUrl = await blobToDataUrl(blob);
+        return { blob, dataUrl: outUrl, sizeBytes: blob.size };
+      }
+    }
+    maxDim = Math.round(maxDim * 0.72);
+  }
+
+  if (!chosenBlob) throw new Error('Không thể nén ảnh.');
+  const outUrl = await blobToDataUrl(chosenBlob);
+  return { blob: chosenBlob, dataUrl: outUrl, sizeBytes: chosenBlob.size };
+}
+
 export async function createWebCardAndOrder(
   input: CreateWebCardInput
 ): Promise<{ card: WebCardRecord; order: ShopOrderRecord }> {
@@ -817,13 +858,31 @@ export async function createWebCardAndOrder(
     }
   }
 
-  // Nén ảnh & tải lên Storage (hoặc lưu bản nén an toàn nếu Storage chưa sẵn sàng)
+  // Nén ảnh đã canh chỉnh & tải lên Storage (hoặc lưu bản nén gọn nếu Storage chưa bật)
   const uploadedPhotos: WebCardPhoto[] = [];
   const rawPhotos = input.photos.slice(0, 6);
   for (let i = 0; i < rawPhotos.length; i++) {
     const p = rawPhotos[i];
     const caption = (p.caption || `Kỷ niệm ${i + 1}`).trim().slice(0, 100);
-    if (p.file) {
+    if (p.dataUrl && p.dataUrl.startsWith('data:image/')) {
+      const compressed = await compressDataUrlUnderMaxBytes(p.dataUrl, 280 * 1024);
+      let finalUrl = compressed.dataUrl;
+      try {
+        finalUrl = await uploadMediaWithTimeout(
+          `cards/${code}/photo_${i}_${Date.now()}.jpg`,
+          compressed.blob,
+          'image/jpeg',
+          uid
+        );
+      } catch {
+        // Fallback: giữ bản nén gọn < 110KB nếu Storage chưa bật để vừa Firestore 1MB
+        if (compressed.sizeBytes > 110 * 1024) {
+          const compact = await compressDataUrlUnderMaxBytes(p.dataUrl, 105 * 1024);
+          finalUrl = compact.dataUrl;
+        }
+      }
+      uploadedPhotos.push({ url: finalUrl, caption });
+    } else if (p.file) {
       const compressed = await compressImageUnder300KB(p.file, 280 * 1024);
       let finalUrl = compressed.dataUrl;
       try {
@@ -834,9 +893,8 @@ export async function createWebCardAndOrder(
           uid
         );
       } catch {
-        // Fallback: giữ bản nén gọn < 120KB nếu Storage chưa bật để lưu trọn trong Firestore
-        if (compressed.sizeBytes > 120 * 1024) {
-          const compact = await compressImageUnder300KB(p.file, 110 * 1024);
+        if (compressed.sizeBytes > 110 * 1024) {
+          const compact = await compressImageUnder300KB(p.file, 105 * 1024);
           finalUrl = compact.dataUrl;
         }
       }
@@ -861,6 +919,25 @@ export async function createWebCardAndOrder(
     }
   }
 
+  // Nếu nhạc nền là file data:audio tải lên từ máy -> ưu tiên đẩy lên Storage lấy URL gọn
+  let finalBgmId = (input.bgmId || 'preset:we-wish-you').trim();
+  if (finalBgmId.startsWith('data:audio/')) {
+    try {
+      const resp = await fetch(finalBgmId);
+      const blob = await resp.blob();
+      if (blob.size <= 1024 * 1024) {
+        finalBgmId = await uploadMediaWithTimeout(
+          `cards/${code}/bgm_${Date.now()}.audio`,
+          blob,
+          blob.type || 'audio/mpeg',
+          uid
+        );
+      }
+    } catch {
+      // Giữ nguyên data:audio/ nếu vừa giới hạn Firestore
+    }
+  }
+
   const now = Date.now();
   const durationDays =
     input.tier === 'premium'
@@ -875,10 +952,10 @@ export async function createWebCardAndOrder(
   const photosJson = JSON.stringify(uploadedPhotos).slice(0, 890000);
   const cleanRecipient = input.recipientName.trim().slice(0, 120) || 'Bạn yêu quý';
   const cleanSender = input.senderName.trim().slice(0, 120) || 'Người thương';
-  const cleanGreeting = input.greeting.trim().slice(0, 160) || 'Chúc mừng';
+  const cleanGreeting = input.greeting.trim().slice(0, 160) || 'Chúc Mừng\nGiáng Sinh';
   const cleanLetter = input.letter.trim().slice(0, 10000) || 'Gửi đến bạn những lời chúc ấm áp nhất.';
   const cleanAccent = (input.accentColor || '#E6BE73').slice(0, 20);
-  const cleanBgm = (input.bgmId || 'preset:we-wish-you').slice(0, 120);
+  const cleanBgm = (finalBgmId || 'preset:we-wish-you').slice(0, 595000);
 
   const cardPayload: Record<string, unknown> = {
     code,
@@ -1056,6 +1133,31 @@ export async function fetchWebCardByCode(rawCode: string): Promise<WebCardRecord
   }
 }
 
+export function subscribeToWebCardByCode(
+  rawCode: string,
+  onUpdate: (card: WebCardRecord | null) => void
+): () => void {
+  const code = slugifyCardCode(rawCode);
+  if (!code) {
+    onUpdate(null);
+    return () => {};
+  }
+  const ref = doc(db, 'webCards', code);
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (!snap.exists()) {
+        onUpdate(null);
+      } else {
+        onUpdate(docToWebCard(snap.id, snap.data()));
+      }
+    },
+    () => {
+      // Fallback: ignore transient snapshot errors
+    }
+  );
+}
+
 export async function fetchMyWebCards(uid: string): Promise<WebCardRecord[]> {
   const path = 'webCards';
   try {
@@ -1067,6 +1169,23 @@ export async function fetchMyWebCards(uid: string): Promise<WebCardRecord[]> {
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, path);
   }
+}
+
+export function subscribeToMyWebCards(
+  uid: string,
+  onUpdate: (cards: WebCardRecord[]) => void
+): () => void {
+  const q = query(collection(db, 'webCards'), where('userId', '==', uid));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs
+        .map((d) => docToWebCard(d.id, d.data()))
+        .sort((a, b) => b.createdAtMs - a.createdAtMs);
+      onUpdate(list);
+    },
+    () => {}
+  );
 }
 
 // ============================================================================
@@ -1223,6 +1342,23 @@ export async function fetchMyOrders(uid: string): Promise<ShopOrderRecord[]> {
   }
 }
 
+export function subscribeToMyOrders(
+  uid: string,
+  onUpdate: (orders: ShopOrderRecord[]) => void
+): () => void {
+  const q = query(collection(db, 'orders'), where('userId', '==', uid));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs
+        .map((d) => docToOrder(d.id, d.data()))
+        .sort((a, b) => b.createdAtMs - a.createdAtMs);
+      onUpdate(list);
+    },
+    () => {}
+  );
+}
+
 export async function notifyCustomerTransferred(
   orderCode: string,
   amount: number,
@@ -1355,18 +1491,37 @@ export async function fetchAllWebCardsForAdmin(): Promise<WebCardRecord[]> {
 export async function toggleWebCardLockAdmin(
   code: string,
   locked: boolean,
-  status?: WebCardRecord['status']
+  status?: WebCardRecord['status'],
+  linkedOrderCode?: string
 ): Promise<void> {
   const path = `webCards/${code}`;
+  const targetStatus: WebCardRecord['status'] =
+    status || (locked ? 'expired' : 'active');
   try {
-    const patch: Record<string, unknown> = {
+    await updateDoc(doc(db, 'webCards', code), {
       locked,
+      status: targetStatus,
       updatedAt: serverTimestamp(),
-    };
-    if (status) patch.status = status;
-    await updateDoc(doc(db, 'webCards', code), patch);
+    });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+
+  if (linkedOrderCode) {
+    try {
+      const orderStatus: ShopOrderRecord['status'] =
+        locked || targetStatus === 'expired'
+          ? 'cancelled'
+          : targetStatus === 'active'
+            ? 'paid'
+            : 'pending_payment';
+      await updateDoc(doc(db, 'orders', linkedOrderCode), {
+        status: orderStatus,
+        updatedAt: serverTimestamp(),
+      });
+    } catch {
+      // Bỏ qua nếu không tìm thấy đơn hàng liên kết
+    }
   }
 }
 

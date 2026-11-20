@@ -40,7 +40,7 @@
         "greeting": { "type": "string", "minLength": 1, "maxLength": 160 },
         "letter": { "type": "string", "minLength": 1, "maxLength": 10000 },
         "accentColor": { "type": "string", "minLength": 4, "maxLength": 20 },
-        "bgmId": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "bgmId": { "type": "string", "minLength": 1, "maxLength": 600000 },
         "photosJson": {
           "type": "string",
           "description": "JSON danh sách tối đa 6 ảnh kỷ niệm (URL Storage hoặc data URL đã nén <= 300KB).",

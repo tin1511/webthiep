@@ -1,23 +1,20 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import {
-  ArrowLeft,
-  ArrowRight,
-  Check,
-  Copy,
-  Hand,
+  BookOpen,
   Heart,
   Lock,
   Music2,
   Pause,
   Play,
+  RotateCcw,
   Sparkles,
   Volume2,
   VolumeX,
   X,
 } from 'lucide-react';
 import { CONFIG, OccasionId } from '../config';
-import { WebCardPhoto, WebCardRecord, buildCardShareUrl } from '../firebase';
+import { WebCardPhoto, WebCardRecord } from '../firebase';
 import { bgmPlayer } from '../bgmPlayer';
 
 interface CardExperience3DProps {
@@ -26,7 +23,25 @@ interface CardExperience3DProps {
   onBackHome?: () => void;
 }
 
-type CardStage = 'particles' | 'greeting' | 'couple-or-question' | 'envelope' | 'open';
+type CardStage = 0 | 1 | 2 | 3;
+
+function splitHeadlineLines(greeting: string): [string, string] {
+  const clean = (greeting || '').normalize('NFC').trim();
+  if (!clean) return ['Chúc Mừng', 'Giáng Sinh'];
+  if (clean.includes('\n')) {
+    const parts = clean
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return [parts[0] || 'Chúc Mừng', parts.slice(1).join(' ') || 'Giáng Sinh'];
+  }
+  const words = clean.split(/\s+/);
+  if (words.length >= 4) {
+    const mid = Math.ceil(words.length / 2);
+    return [words.slice(0, mid).join(' '), words.slice(mid).join(' ')];
+  }
+  return [clean, ''];
+}
 
 function detectSoftwareWebGL(): boolean {
   try {
@@ -43,186 +58,276 @@ function detectSoftwareWebGL(): boolean {
   }
 }
 
-function createGlowTexture(): THREE.CanvasTexture {
-  const size = 64;
-  const c = document.createElement('canvas');
-  c.width = size;
-  c.height = size;
-  const ctx = c.getContext('2d');
-  if (ctx) {
-    const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-    g.addColorStop(0, 'rgba(255,255,255,1)');
-    g.addColorStop(0.28, 'rgba(255,238,204,0.88)');
-    g.addColorStop(0.7, 'rgba(255,210,145,0.2)');
-    g.addColorStop(1, 'rgba(255,210,145,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, size, size);
+function buildTextTargets(
+  headline: [string, string],
+  N: number,
+  outPos: Float32Array,
+  outCol: Float32Array,
+  accentHex: string
+) {
+  const W = 900;
+  const H = 420;
+  const cv = document.createElement('canvas');
+  cv.width = W;
+  cv.height = H;
+  const ctx = cv.getContext('2d');
+  if (!ctx) return;
+
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  const line1 = headline[0] || 'Chúc Mừng';
+  const line2 = headline[1] || '';
+
+  const len1 = line1.length;
+  const len2 = line2.length;
+  const fontSize1 = len1 > 16 ? 95 : len1 > 11 ? 118 : 142;
+  const fontSize2 = len2 > 16 ? 95 : len2 > 11 ? 118 : 142;
+
+  if (line2) {
+    ctx.font = `700 ${fontSize1}px "Be Vietnam Pro", system-ui, "Segoe UI", Arial, sans-serif`;
+    ctx.fillText(line1, W / 2, H * 0.31);
+    ctx.font = `700 ${fontSize2}px "Be Vietnam Pro", system-ui, "Segoe UI", Arial, sans-serif`;
+    ctx.fillText(line2, W / 2, H * 0.7);
+  } else {
+    ctx.font = `700 ${fontSize1}px "Be Vietnam Pro", system-ui, "Segoe UI", Arial, sans-serif`;
+    ctx.fillText(line1, W / 2, H * 0.5);
   }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.needsUpdate = true;
-  return tex;
+
+  const d = ctx.getImageData(0, 0, W, H).data;
+  const pts: [number, number][] = [];
+  for (let y = 0; y < H; y += 3) {
+    for (let u = 0; u < W; u += 3) {
+      if (d[(y * W + u) * 4 + 3] > 128) {
+        pts.push([((u - W / 2) * 13) / W, (-(y - H / 2) * 13) / W]);
+      }
+    }
+  }
+  if (pts.length === 0) pts.push([0, 0]);
+
+  const gold = new THREE.Color(accentHex || '#ffe2a0');
+  const white = new THREE.Color('#ffffff');
+
+  for (let i = 0; i < N; i++) {
+    const q = pts[(Math.random() * pts.length) | 0];
+    outPos[i * 3] = q[0] + (Math.random() - 0.5) * 0.05;
+    outPos[i * 3 + 1] = q[1] + (Math.random() - 0.5) * 0.05;
+    outPos[i * 3 + 2] = (Math.random() - 0.5) * 0.45;
+    const c = Math.random() < 0.72 ? gold : white;
+    outCol[i * 3] = c.r;
+    outCol[i * 3 + 1] = c.g;
+    outCol[i * 3 + 2] = c.b;
+  }
 }
 
-function fillOccasionTargets(
+function buildEnvelopeTargets(N: number, outPos: Float32Array, outCol: Float32Array) {
+  const w = 4;
+  const h = 2.75;
+  const P = '#ff7a8a';
+  const Y = '#ffd98a';
+  const sg: [number, number, number, number, string][] = [
+    [-w, -h, w, -h, P],
+    [w, -h, w, h, P],
+    [w, h, -w, h, P],
+    [-w, h, -w, -h, P],
+    [-w, h, 0, 0.3, Y],
+    [w, h, 0, 0.3, Y],
+  ];
+  const L = sg.map((s) => Math.hypot(s[2] - s[0], s[3] - s[1]));
+  const T = L.reduce((a, b) => a + b, 0);
+  const cc = new THREE.Color();
+
+  for (let i = 0; i < N; i++) {
+    let x: number;
+    let y: number;
+    let hex: string;
+    if (Math.random() < 0.2) {
+      x = (Math.random() * 2 - 1) * w;
+      y = (Math.random() * 2 - 1) * h;
+      hex = '#a8404f';
+    } else {
+      let r = Math.random() * T;
+      let k = 0;
+      while (r > L[k] && k < L.length - 1) {
+        r -= L[k];
+        k++;
+      }
+      const s = sg[k];
+      const t = r / L[k];
+      x = s[0] + (s[2] - s[0]) * t;
+      y = s[1] + (s[3] - s[1]) * t;
+      hex = s[4];
+    }
+    outPos[i * 3] = x + (Math.random() - 0.5) * 0.06;
+    outPos[i * 3 + 1] = y + (Math.random() - 0.5) * 0.06;
+    outPos[i * 3 + 2] = (Math.random() - 0.5) * 0.28;
+    cc.set(hex);
+    outCol[i * 3] = cc.r;
+    outCol[i * 3 + 1] = cc.g;
+    outCol[i * 3 + 2] = cc.b;
+  }
+}
+
+function buildStage3Targets(
   occasion: OccasionId,
   accentHex: string,
-  count: number,
+  N: number,
   outPos: Float32Array,
   outCol: Float32Array
 ) {
-  const info = CONFIG.occasions.find((o) => o.id === occasion);
-  const primary = new THREE.Color(accentHex || info?.accentHex || '#E6BE73');
-  const secondary = new THREE.Color(info?.secondaryHex || '#B83B4A');
-  const warmWhite = new THREE.Color('#FFF8EC');
+  const cc = new THREE.Color();
+  const rnd = Math.random;
+  const setHex = (i: number, h: string) => {
+    cc.set(h);
+    outCol[i * 3] = cc.r;
+    outCol[i * 3 + 1] = cc.g;
+    outCol[i * 3 + 2] = cc.b;
+  };
+  const setHSL = (i: number, h: number, s: number, l: number) => {
+    cc.setHSL(h, s, l);
+    outCol[i * 3] = cc.r;
+    outCol[i * 3 + 1] = cc.g;
+    outCol[i * 3 + 2] = cc.b;
+  };
 
-  for (let i = 0; i < count; i++) {
-    const idx = i * 3;
+  for (let i = 0; i < N; i++) {
     let x = 0;
     let y = 0;
     let z = 0;
-    let mix = 0;
 
     if (occasion === 'noel') {
-      if (i < count * 0.08) {
-        const ang = (i / (count * 0.08)) * Math.PI * 2;
-        const r = i % 2 === 0 ? 0.42 : 0.17;
-        x = Math.cos(ang * 5) * r * 0.65;
-        y = 2.12 + Math.sin(ang * 5) * r * 0.65;
-        z = Math.sin(i * 1.9) * 0.06;
-        mix = 0.04;
-      } else if (i < count * 0.84) {
-        const h = (i - count * 0.08) / (count * 0.76);
-        const radius = (1 - h) * 1.55 + 0.05;
-        const angle = h * Math.PI * 18 + (i % 7) * 0.25;
-        x = Math.cos(angle) * radius;
-        z = Math.sin(angle) * radius;
-        y = -1.7 + h * 3.55;
-        mix = i % 8 === 0 ? 0.92 : h * 0.25;
+      // Đúng mẫu Cây Thông 3D từ tin1511/noelnt
+      const r = rnd();
+      if (r < 0.05) {
+        const a = rnd() * 6.283;
+        const q = rnd() * 0.45;
+        x = Math.cos(a) * q;
+        z = Math.sin(a) * q;
+        y = -5.2 + rnd() * 1;
+        setHex(i, '#8a5a2b');
+      } else if (r < 0.075) {
+        const a = rnd() * 6.283;
+        const b = rnd() * 3.14;
+        const q = rnd() * 0.42;
+        x = Math.sin(b) * Math.cos(a) * q;
+        y = 5.05 + Math.cos(b) * q;
+        z = Math.sin(b) * Math.sin(a) * q;
+        setHex(i, '#fff1b0');
       } else {
-        const a = i * 2.39996;
-        const r = 1.85 + (i % 9) * 0.16;
-        x = Math.cos(a) * r;
-        z = Math.sin(a) * r;
-        y = ((i % 45) / 45 - 0.5) * 4.2;
-        mix = 0.12;
+        const t = Math.pow(rnd(), 0.85);
+        const a = rnd() * 6.283;
+        const q = (1 - t) * 3.4 * (0.55 + 0.45 * rnd()) * (0.88 + 0.12 * Math.sin(t * 22));
+        x = Math.cos(a) * q;
+        z = Math.sin(a) * q;
+        y = -4.4 + t * 9.2;
+        if (rnd() < 0.13) {
+          setHex(i, ['#ff4d5e', '#ffd98a', '#bfe6ff'][(rnd() * 3) | 0]);
+        } else {
+          setHSL(i, 0.36 + rnd() * 0.06, 0.6, 0.3 + rnd() * 0.25);
+        }
       }
     } else if (occasion === 'valentine') {
-      if (i < count * 0.86) {
-        const u = (i * 2.39996) % (Math.PI * 2);
-        const layer = ((i % 15) / 15) * 2 - 1;
-        const scale = 0.098 * (1 - Math.abs(layer) * 0.16);
-        const hx = 16 * Math.pow(Math.sin(u), 3);
-        const hy =
-          13 * Math.cos(u) - 5 * Math.cos(2 * u) - 2 * Math.cos(3 * u) - Math.cos(4 * u);
-        x = hx * scale;
-        y = hy * scale + 0.18;
-        z = layer * 0.5 * Math.sqrt(Math.max(0.05, 1 - Math.abs(hx) / 18));
-        mix = 0.3 + 0.65 * (1 - Math.abs(layer));
-      } else {
-        const a = i * 1.9;
-        const r = 2.0 + (i % 6) * 0.18;
-        x = Math.cos(a) * r;
-        y = Math.sin(a * 0.8) * 1.5;
-        z = Math.sin(a) * r * 0.6;
-        mix = 0.1;
-      }
+      const u = rnd() * Math.PI * 2;
+      const layer = rnd() * 2 - 1;
+      const scale = 0.24 * (1 - Math.abs(layer) * 0.16);
+      const hx = 16 * Math.pow(Math.sin(u), 3);
+      const hy = 13 * Math.cos(u) - 5 * Math.cos(2 * u) - 2 * Math.cos(3 * u) - Math.cos(4 * u);
+      x = hx * scale + (rnd() - 0.5) * 0.15;
+      y = hy * scale + 0.5 + (rnd() - 0.5) * 0.15;
+      z = layer * 1.15 * Math.sqrt(Math.max(0.06, 1 - Math.abs(hx) / 18));
+      setHex(i, rnd() < 0.22 ? '#ffd98a' : rnd() < 0.65 ? '#ff4d6d' : '#ff8a9a');
     } else if (occasion === 'to-tinh') {
-      if (i < count * 0.58) {
-        const p = i / (count * 0.58);
+      if (i < N * 0.55) {
+        const p = i / (N * 0.55);
         if (p < 0.78) {
           const theta = -0.35 * Math.PI + (p / 0.78) * 1.45 * Math.PI;
-          const r = 0.98;
-          x = Math.cos(theta) * r;
-          y = 0.45 + Math.sin(theta) * r;
+          const r = 2.4;
+          x = Math.cos(theta) * r + (rnd() - 0.5) * 0.14;
+          y = 1.0 + Math.sin(theta) * r + (rnd() - 0.5) * 0.14;
           if (p > 0.6) {
             const tail = (p - 0.6) / 0.18;
             x *= 1 - tail * 0.88;
-            y = 0.45 - tail * 1.05;
+            y = 1.0 - tail * 2.5;
           }
-          z = Math.sin(p * 24) * 0.14;
-          mix = 0.28;
+          z = Math.sin(p * 24) * 0.35;
+          setHex(i, '#ffd98a');
         } else {
-          const a = p * 40;
-          const rad = 0.19 * ((i % 5) / 5);
+          const a = rnd() * 6.283;
+          const rad = 0.45 * rnd();
           x = Math.cos(a) * rad;
-          y = -1.1 + Math.sin(a) * rad;
-          z = Math.sin(a * 2) * 0.12;
-          mix = 0.92;
+          y = -2.6 + Math.sin(a) * rad;
+          z = (rnd() - 0.5) * 0.25;
+          setHex(i, '#ff7a8a');
         }
       } else {
         const ring = i % 2 === 0 ? 1 : -1;
-        const a = i * 0.19;
-        const r = 2.0;
+        const a = rnd() * 6.283;
+        const r = 4.4 + (rnd() - 0.5) * 0.25;
         x = Math.cos(a) * r;
-        y = Math.sin(a) * r * 0.44 * ring;
-        z = Math.sin(a) * r * 0.8;
-        mix = ring > 0 ? 0.18 : 0.75;
+        y = Math.sin(a) * r * 0.42 * ring;
+        z = Math.sin(a) * r * 0.75;
+        setHex(i, ring > 0 ? accentHex || '#ffd98a' : '#ff7a8a');
       }
     } else if (occasion === 'tet') {
-      if (i < count * 0.62) {
-        const p = i / (count * 0.62);
+      if (i < N * 0.65) {
+        const p = i / (N * 0.65);
         const lat = (p - 0.5) * Math.PI * 0.92;
-        const lon = i * 2.39996;
-        const r = 1.2 * Math.cos(lat * 0.85);
+        const lon = rnd() * 6.283;
+        const r = 2.8 * Math.cos(lat * 0.82);
         x = Math.cos(lon) * r;
         z = Math.sin(lon) * r;
-        y = Math.sin(lat) * 1.38 + 0.15;
-        mix = i % 4 === 0 ? 0.12 : 0.86;
-      } else if (i < count * 0.76) {
-        const s = (i - count * 0.62) / (count * 0.14);
+        y = Math.sin(lat) * 3.1 + 0.4;
+        setHex(i, rnd() < 0.22 ? '#ffd98a' : '#e11d48');
+      } else if (i < N * 0.8) {
+        const s = (i - N * 0.65) / (N * 0.15);
         const strand = (i % 7) - 3;
-        x = strand * 0.085;
-        z = ((i % 3) - 1) * 0.06;
-        y = -1.14 - s * 0.72;
-        mix = 0.18;
+        x = strand * 0.2;
+        z = (rnd() - 0.5) * 0.18;
+        y = -2.7 - s * 1.8;
+        setHex(i, '#ffd98a');
       } else {
-        const a = i * 1.618;
-        const rad = 1.65 + (i % 7) * 0.18;
-        x = Math.cos(a) * rad;
-        y = Math.sin(a * 1.3) * 1.5;
-        z = Math.sin(a) * rad * 0.85;
-        mix = i % 2 === 0 ? 0.06 : 0.78;
+        const a = rnd() * 6.283;
+        const r = 3.8 + rnd() * 1.4;
+        x = Math.cos(a) * r;
+        z = Math.sin(a) * r;
+        y = (rnd() - 0.5) * 7.5;
+        setHex(i, rnd() < 0.5 ? '#facc15' : '#fda4af');
       }
     } else {
-      if (i < count * 0.55) {
+      // Sinh nhật: Bánh kem 2 tầng & ánh nến lung linh
+      if (i < N * 0.58) {
         const isTop = i % 3 === 0;
-        const angle = i * 2.39996;
-        const rad = isTop ? 0.92 : 1.4;
-        const heightOffset = isTop ? 0.22 : -0.68;
-        const layerY = ((i % 10) / 10 - 0.5) * 0.72;
+        const angle = rnd() * 6.283;
+        const rad = (isTop ? 2.1 : 3.2) * (0.72 + 0.28 * rnd());
+        const heightOffset = isTop ? 0.5 : -1.8;
+        const layerY = (rnd() - 0.5) * 1.8;
         x = Math.cos(angle) * rad;
         z = Math.sin(angle) * rad;
         y = heightOffset + layerY;
-        mix = isTop ? 0.62 : 0.22;
-      } else if (i < count * 0.78) {
+        setHex(i, isTop ? '#f9a8d4' : '#fde68a');
+      } else if (i < N * 0.8) {
         const candleIdx = (i % 3) - 1;
-        const sub = (i / (count * 0.23)) * 10;
+        const a = rnd() * 6.283;
         const isFlame = i % 4 === 0;
-        x = candleIdx * 0.42 + Math.cos(sub) * (isFlame ? 0.05 : 0.06);
-        z = Math.sin(sub) * (isFlame ? 0.05 : 0.06);
-        y = isFlame ? 1.25 + ((i % 5) / 5) * 0.28 : 0.62 + ((i % 8) / 8) * 0.55;
-        mix = isFlame ? 0.92 : 0.08;
+        x = candleIdx * 0.95 + Math.cos(a) * (isFlame ? 0.12 : 0.14);
+        z = Math.sin(a) * (isFlame ? 0.12 : 0.14);
+        y = isFlame ? 2.9 + rnd() * 0.65 : 1.45 + rnd() * 1.4;
+        setHex(i, isFlame ? '#ffd98a' : '#fff7ec');
       } else {
-        const a = i * 2.39996;
-        const phi = Math.acos(1 - 2 * ((i % 50) / 50));
-        const r = 1.95 + (i % 5) * 0.16;
+        const a = rnd() * 6.283;
+        const phi = Math.acos(1 - 2 * rnd());
+        const r = 4.2 + rnd() * 1.2;
         x = r * Math.sin(phi) * Math.cos(a);
-        y = r * Math.cos(phi) * 0.75 + 0.3;
+        y = r * Math.cos(phi) * 0.75 + 0.5;
         z = r * Math.sin(phi) * Math.sin(a);
-        mix = 0.45;
+        setHex(i, accentHex || '#ffd98a');
       }
     }
 
-    outPos[idx] = x;
-    outPos[idx + 1] = y;
-    outPos[idx + 2] = z;
-
-    const c = primary.clone().lerp(secondary, mix);
-    if (i % 10 === 0) c.lerp(warmWhite, 0.55);
-    outCol[idx] = c.r;
-    outCol[idx + 1] = c.g;
-    outCol[idx + 2] = c.b;
+    outPos[i * 3] = x;
+    outPos[i * 3 + 1] = y;
+    outPos[i * 3 + 2] = z;
   }
 }
 
@@ -231,7 +336,6 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
   isPreview = false,
   onBackHome,
 }) => {
-  // Hỗ trợ tham số ?to=Tên để đổi nhanh tên người nhận khi chia sẻ
   const effectiveRecipient = useMemo(() => {
     if (typeof window === 'undefined' || isPreview) return card.recipientName;
     const params = new URLSearchParams(window.location.search);
@@ -239,29 +343,87 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
     return toOverride ? toOverride.slice(0, 120) : card.recipientName;
   }, [card.recipientName, isPreview]);
 
-  const isExpired =
-    !isPreview && typeof card.expiresAtMs === 'number' && Date.now() > card.expiresAtMs;
-  const isLocked = !isPreview && card.locked;
+  const headlinePair = useMemo(() => splitHeadlineLines(card.greeting), [card.greeting]);
+  const letterParagraphs = useMemo(() => {
+    const raw = (card.letter || '').normalize('NFC').trim();
+    const parts = raw
+      .split(/\n\s*\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return parts.length > 0 ? parts : [raw || 'Gửi đến bạn những lời chúc tốt đẹp nhất.'];
+  }, [card.letter]);
 
-  const [stage, setStage] = useState<CardStage>('particles');
+  const isExpired =
+    !isPreview &&
+    (card.status === 'expired' ||
+      (typeof card.expiresAtMs === 'number' && Date.now() > card.expiresAtMs));
+  const isLocked = !isPreview && card.locked;
+  const isPendingApproval = !isPreview && !isLocked && !isExpired && card.status === 'pending_payment';
+
+  const [stage, setStage] = useState<CardStage>(0);
+  const [stageUiReady, setStageUiReady] = useState<boolean>(false);
   const [muted, setMuted] = useState<boolean>(false);
-  const [voicePlaying, setVoicePlaying] = useState<boolean>(false);
+  const [letterModalOpen, setLetterModalOpen] = useState<boolean>(false);
+  const [letterAnimPhase, setLetterAnimPhase] = useState<
+    'opening_flap' | 'pulling_letter' | 'typing_text'
+  >('opening_flap');
+  const [typedCharCount, setTypedCharCount] = useState<number>(0);
+  const [replayLetterKey, setReplayLetterKey] = useState<number>(0);
   const [lightboxPhoto, setLightboxPhoto] = useState<WebCardPhoto | null>(null);
-  const [copied, setCopied] = useState<boolean>(false);
+  const [voicePlaying, setVoicePlaying] = useState<boolean>(false);
+  const [toTinhAccepted, setToTinhAccepted] = useState<boolean>(false);
   const [noBtnPos, setNoBtnPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [noAttempts, setNoAttempts] = useState<number>(0);
-  const [frostClearedPct, setFrostClearedPct] = useState<number>(0);
+
+  const fullLetterJoined = useMemo(() => letterParagraphs.join('\n\n'), [letterParagraphs]);
+  const totalLetterChars = fullLetterJoined.length;
+
+  // Điều phối hiệu ứng: (1) Mở nắp phong bì 3D -> (2) Rút lá thư từ phong bì ra ngoài -> (3) Hiện từng chữ
+  useEffect(() => {
+    if (!letterModalOpen) return;
+    setLetterAnimPhase('opening_flap');
+    setTypedCharCount(0);
+
+    const pullTimer = window.setTimeout(() => {
+      setLetterAnimPhase('pulling_letter');
+    }, 680);
+
+    const readTimer = window.setTimeout(() => {
+      setLetterAnimPhase('typing_text');
+    }, 1520);
+
+    return () => {
+      clearTimeout(pullTimer);
+      clearTimeout(readTimer);
+    };
+  }, [letterModalOpen, replayLetterKey]);
+
+  // Hiệu ứng từng chữ hiện lên (Typewriter) sau khi lá thư đã được rút ra ngoài
+  useEffect(() => {
+    if (!letterModalOpen || letterAnimPhase !== 'typing_text') return;
+    if (typedCharCount >= totalLetterChars) return;
+
+    const stepMs = totalLetterChars > 350 ? 18 : totalLetterChars > 180 ? 24 : 32;
+    const timer = window.setTimeout(() => {
+      setTypedCharCount((prev) => Math.min(totalLetterChars, prev + 1));
+    }, stepMs);
+
+    return () => clearTimeout(timer);
+  }, [letterModalOpen, letterAnimPhase, typedCharCount, totalLetterChars]);
 
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
-  const frostCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const voiceAudioRef = useRef<HTMLAudioElement | null>(null);
   const dodgeZoneRef = useRef<HTMLDivElement | null>(null);
-  const stageRef = useRef<CardStage>(stage);
-  stageRef.current = stage;
+  const stageRef = useRef<CardStage>(0);
+  const toTinhAcceptedRef = useRef<boolean>(false);
+  const goStageRef = useRef<((s: CardStage) => void) | null>(null);
 
-  // Khởi tạo nhạc nền không bản quyền theo cấu hình của thiệp
+  stageRef.current = stage;
+  toTinhAcceptedRef.current = toTinhAccepted;
+
+  // Nhạc nền không bản quyền hoặc link tự chọn
   useEffect(() => {
-    if (isLocked || isExpired) return;
+    if (isLocked || isExpired || isPendingApproval) return;
     bgmPlayer.setTrack(card.bgmId || 'preset:we-wish-you');
     return () => {
       if (!isPreview) bgmPlayer.stop();
@@ -271,7 +433,7 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
       }
       bgmPlayer.setDucking(false);
     };
-  }, [card.bgmId, isLocked, isExpired, isPreview]);
+  }, [card.bgmId, isLocked, isExpired, isPendingApproval, isPreview]);
 
   const ensureAudioStarts = () => {
     if (!muted && card.bgmId !== 'none') {
@@ -280,43 +442,30 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
     }
   };
 
-  // Tự chuyển giai đoạn intro nhẹ nhàng ở phần mở đầu
+  // Khởi tạo sân khấu Three.js 4 giai đoạn chuẩn tin1511/noelnt
   useEffect(() => {
-    if (isLocked || isExpired) return;
-    if (stage === 'particles') {
-      const t = setTimeout(() => setStage('greeting'), 2400);
-      return () => clearTimeout(t);
-    }
-  }, [stage, isLocked, isExpired]);
-
-  // Khởi tạo sân khấu Three.js 3D duy nhất cho trải nghiệm thiệp
-  useEffect(() => {
-    if (isLocked || isExpired) return;
+    if (isLocked || isExpired || isPendingApproval) return;
     const container = canvasMountRef.current;
     if (!container) return;
 
-    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // Luôn giữ đầy đủ animation hạt 3D, tuyết rơi, xoay mô hình & hiệu ứng bung ảnh Polaroid (RM = false như bản gốc noelnt)
+    const prefersReducedMotion = false;
     const isSoftwareGl = detectSoftwareWebGL();
     const isWeak =
       isSoftwareGl ||
-      prefersReducedMotion ||
       (typeof navigator.hardwareConcurrency === 'number' && navigator.hardwareConcurrency <= 4) ||
       window.innerWidth < 640;
 
-    const count = isSoftwareGl ? 900 : isWeak ? 1500 : 2800;
+    const N = isSoftwareGl ? 2400 : isWeak ? 4500 : 7000;
+    const SN = isSoftwareGl ? 320 : isWeak ? 600 : 900;
 
     const width = Math.max(container.clientWidth, 280);
-    const height = Math.max(container.clientHeight, 260);
-
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(44, width / height, 0.1, 60);
-    camera.position.set(0, 0.2, 6.1);
+    const height = Math.max(container.clientHeight, 360);
 
     let renderer: THREE.WebGLRenderer;
     try {
       renderer = new THREE.WebGLRenderer({
         antialias: !isSoftwareGl,
-        alpha: true,
         powerPreference: 'high-performance',
       });
     } catch {
@@ -331,75 +480,326 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
     renderer.domElement.style.width = '100%';
     renderer.domElement.style.height = '100%';
     renderer.domElement.style.display = 'block';
-    container.innerHTML = '';
-    container.appendChild(renderer.domElement);
+    renderer.domElement.style.touchAction = 'none';
+    container.replaceChildren(renderer.domElement);
 
-    const spriteTex = createGlowTexture();
-    const positions = new Float32Array(count * 3);
-    const colors = new Float32Array(count * 3);
-    const targetsPos = new Float32Array(count * 3);
-    const targetsCol = new Float32Array(count * 3);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0b1622);
 
-    fillOccasionTargets(card.occasion, card.accentColor, count, targetsPos, targetsCol);
+    const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 100);
+    const updateCameraDistance = (w: number, h: number) => {
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      camera.position.z = Math.max(16.5, 16 / (2 * Math.tan((25 * Math.PI) / 180) * camera.aspect));
+    };
+    updateCameraDistance(width, height);
 
-    for (let i = 0; i < count; i++) {
-      const idx = i * 3;
-      if (prefersReducedMotion) {
-        positions[idx] = targetsPos[idx];
-        positions[idx + 1] = targetsPos[idx + 1];
-        positions[idx + 2] = targetsPos[idx + 2];
-      } else {
-        positions[idx] = (Math.random() - 0.5) * 8;
-        positions[idx + 1] = (Math.random() - 0.5) * 6;
-        positions[idx + 2] = (Math.random() - 0.5) * 5;
-      }
-      colors[idx] = targetsCol[idx];
-      colors[idx + 1] = targetsCol[idx + 1];
-      colors[idx + 2] = targetsCol[idx + 2];
+    const group = new THREE.Group();
+    scene.add(group);
+
+    // Dữ liệu vị trí & màu cho 4 giai đoạn
+    const pos = new Float32Array(N * 3);
+    const col = new Float32Array(N * 3);
+    const seed = new Float32Array(N * 4);
+    const TP: (Float32Array | null)[] = [
+      null,
+      new Float32Array(N * 3),
+      new Float32Array(N * 3),
+      new Float32Array(N * 3),
+    ];
+    const TC: Float32Array[] = [
+      new Float32Array(N * 3),
+      new Float32Array(N * 3),
+      new Float32Array(N * 3),
+      new Float32Array(N * 3),
+    ];
+
+    const cc = new THREE.Color();
+    for (let i = 0; i < N * 4; i++) seed[i] = Math.random();
+    for (let i = 0; i < N; i++) {
+      pos[i * 3] = (Math.random() - 0.5) * 30;
+      pos[i * 3 + 1] = (Math.random() - 0.5) * 20;
+      pos[i * 3 + 2] = (Math.random() - 0.5) * 20;
+      const r = Math.random();
+      cc.set(r < 0.5 ? '#ffd98a' : r < 0.8 ? '#ffffff' : '#9fd4ff');
+      TC[0][i * 3] = cc.r;
+      TC[0][i * 3 + 1] = cc.g;
+      TC[0][i * 3 + 2] = cc.b;
     }
 
-    const geometry = new THREE.BufferGeometry();
-    const posAttr = new THREE.BufferAttribute(positions, 3);
-    const colAttr = new THREE.BufferAttribute(colors, 3);
-    geometry.setAttribute('position', posAttr);
-    geometry.setAttribute('color', colAttr);
+    // Đích 1: Chữ 2 dòng người dùng tự nhập
+    if (TP[1]) {
+      buildTextTargets(headlinePair, N, TP[1], TC[1], card.accentColor);
+      if (document.fonts && typeof document.fonts.load === 'function') {
+        Promise.race([
+          document.fonts.load('700 142px "Be Vietnam Pro"', `${headlinePair[0]} ${headlinePair[1]}`),
+          new Promise((res) => setTimeout(res, 1200)),
+        ]).then(() => {
+          if (TP[1] && !disposed) {
+            buildTextTargets(headlinePair, N, TP[1], TC[1], card.accentColor);
+          }
+        });
+      }
+    }
 
-    const material = new THREE.PointsMaterial({
-      size: isWeak ? 0.115 : 0.098,
-      map: spriteTex,
+    // Đích 2: Phong thư 3D
+    if (TP[2]) {
+      buildEnvelopeTargets(N, TP[2], TC[2]);
+    }
+
+    // Đích 3: Cây thông / mô hình 3D theo dịp
+    if (TP[3]) {
+      buildStage3Targets(card.occasion, card.accentColor, N, TP[3], TC[3]);
+    }
+
+    // Sprite hạt sáng mềm
+    const spr = (() => {
+      const c = document.createElement('canvas');
+      c.width = c.height = 64;
+      const x = c.getContext('2d')!;
+      const g = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+      g.addColorStop(0, '#fff');
+      g.addColorStop(0.4, 'rgba(255,255,255,.65)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      x.fillStyle = g;
+      x.fillRect(0, 0, 64, 64);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    })();
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    const pm = new THREE.PointsMaterial({
+      size: 0.17,
+      map: spr,
       vertexColors: true,
       transparent: true,
-      opacity: 0.94,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
-      sizeAttenuation: true,
+    });
+    group.add(new THREE.Points(geo, pm));
+
+    // Tuyết / cánh hoa nền rơi nhẹ
+    const sp = new Float32Array(SN * 3);
+    for (let i = 0; i < SN; i++) {
+      sp[i * 3] = (Math.random() - 0.5) * 36;
+      sp[i * 3 + 1] = (Math.random() - 0.5) * 18;
+      sp[i * 3 + 2] = (Math.random() - 0.5) * 14;
+    }
+    const sg = new THREE.BufferGeometry();
+    sg.setAttribute('position', new THREE.BufferAttribute(sp, 3));
+    const sm = new THREE.PointsMaterial({
+      size: 0.14,
+      map: spr,
+      transparent: true,
+      opacity: 0.85,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    scene.add(new THREE.Points(sg, sm));
+
+    // Các khung ảnh Polaroid treo xoắn ốc quanh mô hình 3D (Stage 3)
+    const disposableTextures: THREE.Texture[] = [spr];
+    const disposableGeos: THREE.BufferGeometry[] = [geo, sg];
+    const disposableMats: THREE.Material[] = [pm, sm];
+
+    const photoList: WebCardPhoto[] =
+      card.photos && card.photos.length > 0
+        ? card.photos
+        : [
+            {
+              url: '',
+              caption: card.greeting.replace(/\n/g, ' · '),
+            },
+          ];
+
+    const photoGroups: THREE.Group[] = [];
+    const picMeshes: THREE.Object3D[] = [];
+    const backGeo = new THREE.PlaneGeometry(1.5, 1.78);
+    const picGeo = new THREE.PlaneGeometry(1.3, 1.3);
+    const hookGeo = new THREE.SphereGeometry(0.07, 8, 8);
+    const backMat = new THREE.MeshBasicMaterial({ color: 0xfff7ec, side: THREE.DoubleSide });
+    const hookMat = new THREE.MeshBasicMaterial({ color: 0xffd98a });
+    disposableGeos.push(backGeo, picGeo, hookGeo);
+    disposableMats.push(backMat, hookMat);
+
+    photoList.forEach((p, i, arr) => {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 512;
+      const x = cv.getContext('2d')!;
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      disposableTextures.push(tex);
+
+      const drawPlaceholder = () => {
+        const g = x.createLinearGradient(0, 0, 512, 512);
+        g.addColorStop(0, '#ff8a9a');
+        g.addColorStop(1, '#ffd98a');
+        x.fillStyle = g;
+        x.fillRect(0, 0, 512, 512);
+        x.fillStyle = '#fff';
+        x.textAlign = 'center';
+        x.textBaseline = 'middle';
+        x.font = '180px sans-serif';
+        x.fillText('♥', 256, 225);
+        x.font = '600 36px "Be Vietnam Pro", sans-serif';
+        x.fillText(arr.length === 1 && !p.url ? 'Thư Gửi Bạn' : `Ảnh ${i + 1}`, 256, 395);
+        tex.needsUpdate = true;
+      };
+
+      drawPlaceholder();
+      if (p.url) {
+        const im = new Image();
+        im.crossOrigin = 'anonymous';
+        im.onload = () => {
+          if (disposed) return;
+          const s = Math.min(im.width, im.height);
+          x.drawImage(im, (im.width - s) / 2, (im.height - s) / 2, s, s, 0, 0, 512, 512);
+          tex.needsUpdate = true;
+        };
+        im.src = p.url;
+      }
+
+      const pg = new THREE.Group();
+      const back = new THREE.Mesh(backGeo, backMat);
+      const picMat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
+      disposableMats.push(picMat);
+      const pic = new THREE.Mesh(picGeo, picMat);
+      pic.position.set(0, 0.14, 0.015);
+      const hook = new THREE.Mesh(hookGeo, hookMat);
+      hook.position.y = 0.95;
+      pg.add(back, pic, hook);
+
+      const y = arr.length === 1 ? -0.4 : -2.7 + (i / Math.max(1, arr.length - 1)) * 5.2;
+      const a = i * 2.4;
+      const r = (1 - (y + 4.4) / 9.2) * 3.4 * 0.95 + 0.35;
+      pg.position.set(Math.sin(a) * r, y, Math.cos(a) * r);
+      pg.rotation.set(0, a, i % 2 ? 0.08 : -0.08);
+      pg.scale.setScalar(0.001);
+      pg.userData = { p, i, fallbackUrl: () => cv.toDataURL('image/jpeg', 0.9) };
+      group.add(pg);
+      photoGroups.push(pg);
+      pic.userData.g = pg;
+      picMeshes.push(pic);
     });
 
-    const points = new THREE.Points(geometry, material);
-    scene.add(points);
+    // Điều phối 4 giai đoạn
+    let curStage: CardStage = 0;
+    let st = 0;
+    let last = performance.now() / 1000;
+    const t0 = last;
+    let spin = 0;
+    let drag = false;
+    let moved = 0;
+    let px = 0;
 
-    let pointerX = 0;
-    let pointerY = 0;
-    const onPointerMove = (e: PointerEvent) => {
-      const rect = container.getBoundingClientRect();
-      if (!rect.width || !rect.height) return;
-      pointerX = ((e.clientX - rect.left) / rect.width - 0.5) * 2;
-      pointerY = ((e.clientY - rect.top) / rect.height - 0.5) * 2;
+    let uiTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const goStage = (s: CardStage) => {
+      curStage = s;
+      stageRef.current = s;
+      setStage(s);
+      setStageUiReady(false);
+      st = performance.now() / 1000 - t0;
+      if (uiTimer) clearTimeout(uiTimer);
+      const delayMs = s === 2 ? 1800 : s === 3 ? 2600 : 0;
+      uiTimer = setTimeout(() => {
+        if (!disposed) setStageUiReady(true);
+      }, delayMs);
+      if (s === 3 && !isPreview) {
+        ensureAudioStarts();
+      }
     };
-    container.addEventListener('pointermove', onPointerMove, { passive: true });
+    goStageRef.current = goStage;
+
+    const timer1 = setTimeout(() => {
+      if (curStage === 0) goStage(1);
+    }, 3200);
+    const timer2 = setTimeout(() => {
+      if (curStage === 1) goStage(2);
+    }, 8400);
+
+    // Raycast & kéo xoay 3D bằng pointer
+    const ray = new THREE.Raycaster();
+    const cv = renderer.domElement;
+
+    const onPointerDown = (e: PointerEvent) => {
+      drag = true;
+      moved = 0;
+      px = e.clientX;
+      try {
+        cv.setPointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!drag) return;
+      const dx = e.clientX - px;
+      px = e.clientX;
+      moved += Math.abs(dx);
+      if (curStage === 3) spin += dx * 0.008;
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      drag = false;
+      if (moved > 8) return;
+
+      if (curStage === 0) {
+        goStage(1);
+        return;
+      }
+      if (curStage === 1) {
+        goStage(2);
+        return;
+      }
+      if (curStage === 2) {
+        if (card.occasion !== 'to-tinh' || toTinhAcceptedRef.current) {
+          ensureAudioStarts();
+          goStage(3);
+        }
+        return;
+      }
+
+      if (curStage === 3) {
+        const rect = cv.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        ray.setFromCamera(
+          new THREE.Vector2(
+            ((e.clientX - rect.left) / rect.width) * 2 - 1,
+            -((e.clientY - rect.top) / rect.height) * 2 + 1
+          ),
+          camera
+        );
+        const hit = ray.intersectObjects(picMeshes)[0];
+        if (hit && hit.object.userData.g && hit.object.userData.g.scale.x > 0.6) {
+          const ud = hit.object.userData.g.userData;
+          const p: WebCardPhoto = ud.p;
+          setLightboxPhoto({
+            url: p.url || ud.fallbackUrl(),
+            caption: p.caption,
+          });
+        }
+      }
+    };
+
+    cv.addEventListener('pointerdown', onPointerDown);
+    cv.addEventListener('pointermove', onPointerMove);
+    cv.addEventListener('pointerup', onPointerUp);
 
     const resizeObserver = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) return;
-      const w = Math.max(entry.contentRect.width, 240);
-      const h = Math.max(entry.contentRect.height, 240);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
+      const w = Math.max(entry.contentRect.width, 260);
+      const h = Math.max(entry.contentRect.height, 260);
       renderer.setSize(w, h);
+      updateCameraDistance(w, h);
     });
     resizeObserver.observe(container);
 
-    const clock = new THREE.Clock();
     let frameId = 0;
     let disposed = false;
 
@@ -423,45 +823,92 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
           return;
         }
       } catch {
-        // fallback timeout
+        // fallback
       }
       frameId = window.setTimeout(cb, 80);
     }
 
-    const tick = () => {
+    function tick() {
       if (disposed) return;
-      const dt = Math.min(clock.getDelta(), 0.05);
-      const elapsed = clock.getElapsedTime();
+      const now = performance.now() / 1000;
+      const dt = Math.min(0.05, now - last);
+      const t = now - t0;
+      last = now;
 
-      const posArr = posAttr.array as Float32Array;
-      const moveAlpha = prefersReducedMotion ? 1 : 1 - Math.exp(-4.2 * dt);
-      const isHeart = card.occasion === 'valentine';
-      const beat = isHeart && !prefersReducedMotion ? 1 + Math.sin(elapsed * 3.2) * 0.065 : 1;
+      const tp = TP[curStage];
+      const tc = TC[curStage];
+      const wob = prefersReducedMotion ? 0 : 0.03;
+      const isHeartBeat = card.occasion === 'valentine' && curStage === 3 && !prefersReducedMotion;
+      const beat = isHeartBeat ? 1 + Math.sin(t * 3.1) * 0.05 : 1;
 
-      for (let i = 0; i < count; i++) {
-        const idx = i * 3;
-        const shimmer = prefersReducedMotion ? 0 : Math.sin(elapsed * 1.9 + i * 0.14) * 0.025;
-        posArr[idx] += (targetsPos[idx] * beat - posArr[idx]) * moveAlpha;
-        posArr[idx + 1] += (targetsPos[idx + 1] * beat + shimmer - posArr[idx + 1]) * moveAlpha;
-        posArr[idx + 2] += (targetsPos[idx + 2] * beat - posArr[idx + 2]) * moveAlpha;
+      for (let i = 0; i < N; i++) {
+        const j = i * 3;
+        const s = i * 4;
+        let tx: number;
+        let ty: number;
+        let tz: number;
+
+        if (curStage === 0 || !tp) {
+          const a = seed[s] * 6.283 + t * (0.2 + seed[s + 1] * 0.3);
+          const b = seed[s + 2] * 3.14 + t * 0.12;
+          const r = 5 + seed[s + 3] * 6;
+          tx = r * Math.sin(b) * Math.cos(a);
+          ty = r * Math.cos(b) * 0.7;
+          tz = r * Math.sin(b) * Math.sin(a);
+        } else {
+          tx = tp[j] * beat + Math.sin(t * 1.7 + i) * wob;
+          ty = tp[j + 1] * beat + Math.cos(t * 1.3 + i) * wob;
+          tz = tp[j + 2] * beat;
+        }
+
+        const k = prefersReducedMotion
+          ? 1
+          : 1 - Math.exp(-dt * (curStage === 0 ? 1.2 : 1.6 + seed[s + 1] * 3));
+        pos[j] += (tx - pos[j]) * k;
+        pos[j + 1] += (ty - pos[j + 1]) * k;
+        pos[j + 2] += (tz - pos[j + 2]) * k;
+
+        col[j] += (tc[j] - col[j]) * k;
+        col[j + 1] += (tc[j + 1] - col[j + 1]) * k;
+        col[j + 2] += (tc[j + 2] - col[j + 2]) * k;
       }
-      posAttr.needsUpdate = true;
+
+      geo.attributes.position.needsUpdate = true;
+      geo.attributes.color.needsUpdate = true;
+
+      if (curStage === 3) {
+        if (!drag && !prefersReducedMotion) spin += dt * 0.15;
+        photoGroups.forEach((pg, i) => {
+          const e = Math.max(0, Math.min(1, (t - st - 1.4 - i * 0.25) / 0.8));
+          pg.scale.setScalar(0.001 + e * e * (3 - 2 * e));
+          pg.rotation.x = Math.sin(t * 1.2 + i) * 0.04;
+        });
+        sm.opacity += (0.8 - sm.opacity) * dt;
+      } else {
+        photoGroups.forEach((pg) => {
+          pg.scale.setScalar(0.001);
+        });
+      }
+
+      group.rotation.y = curStage === 3 ? spin : prefersReducedMotion ? 0 : Math.sin(t * 0.4) * 0.12;
+      group.position.y = prefersReducedMotion ? 0 : Math.sin(t * 0.8) * 0.15;
+      pm.size = prefersReducedMotion ? 0.17 : 0.17 + Math.sin(t * 2.2) * 0.025;
 
       if (!prefersReducedMotion) {
-        points.rotation.y = THREE.MathUtils.damp(
-          points.rotation.y,
-          elapsed * 0.25 + pointerX * 0.45,
-          4,
-          dt
-        );
-        points.rotation.x = THREE.MathUtils.damp(points.rotation.x, pointerY * 0.2, 4, dt);
+        for (let i = 0; i < SN; i++) {
+          sp[i * 3 + 1] -= dt * (0.8 + (i % 5) * 0.15);
+          sp[i * 3] += Math.sin(t * 0.6 + i) * dt * 0.35;
+          if (sp[i * 3 + 1] < -9) sp[i * 3 + 1] = 9;
+        }
+        sg.attributes.position.needsUpdate = true;
       }
 
+      camera.lookAt(0, 0, 0);
       renderer.render(scene, camera);
 
       if (isSoftwareGl) afterDraw(tick);
       else frameId = requestAnimationFrame(tick);
-    };
+    }
 
     tick();
 
@@ -469,101 +916,31 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
       disposed = true;
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+      if (uiTimer) clearTimeout(uiTimer);
       resizeObserver.disconnect();
-      container.removeEventListener('pointermove', onPointerMove);
-      geometry.dispose();
-      material.dispose();
-      spriteTex.dispose();
+      cv.removeEventListener('pointerdown', onPointerDown);
+      cv.removeEventListener('pointermove', onPointerMove);
+      cv.removeEventListener('pointerup', onPointerUp);
+      disposableGeos.forEach((g) => g.dispose());
+      disposableMats.forEach((m) => m.dispose());
+      disposableTextures.forEach((tx) => tx.dispose());
       renderer.dispose();
       if (renderer.domElement.parentNode === container) {
         container.removeChild(renderer.domElement);
       }
     };
-  }, [card.occasion, card.accentColor, isLocked, isExpired, stage === 'open']);
-
-  // Khởi tạo lớp sương giá lau trên Canvas ở bước Phong thư (`envelope`)
-  useEffect(() => {
-    if (stage !== 'envelope') return;
-    const canvas = frostCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    canvas.width = 480;
-    canvas.height = 300;
-    ctx.globalCompositeOperation = 'source-over';
-    const grad = ctx.createLinearGradient(0, 0, 480, 300);
-    grad.addColorStop(0, '#E8EEF5');
-    grad.addColorStop(0.5, '#D4DFEC');
-    grad.addColorStop(1, '#E2E9F2');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 480, 300);
-
-    // Vẽ tinh thể sương mờ nhẹ
-    for (let i = 0; i < 240; i++) {
-      ctx.fillStyle = `rgba(255,255,255,${0.25 + (i % 5) * 0.1})`;
-      ctx.beginPath();
-      ctx.arc((i * 73) % 480, (i * 137) % 300, 1 + (i % 4), 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    ctx.fillStyle = '#3B4252';
-    ctx.font = '600 18px "Be Vietnam Pro", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('Lau nhẹ lớp sương để mở phong thư', 240, 145);
-    ctx.font = '400 13px "Be Vietnam Pro", sans-serif';
-    ctx.fillStyle = '#525E75';
-    ctx.fillText('Chạm hoặc kéo ngang màn hình', 240, 174);
-
-    let isDrawing = false;
-    let wipedSteps = 0;
-
-    const wipeAt = (clientX: number, clientY: number) => {
-      const rect = canvas.getBoundingClientRect();
-      if (!rect.width || !rect.height) return;
-      const x = ((clientX - rect.left) / rect.width) * canvas.width;
-      const y = ((clientY - rect.top) / rect.height) * canvas.height;
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.beginPath();
-      ctx.arc(x, y, 38, 0, Math.PI * 2);
-      ctx.fill();
-      wipedSteps += 1;
-      const pct = Math.min(100, Math.round((wipedSteps / 26) * 100));
-      setFrostClearedPct(pct);
-      if (wipedSteps >= 26) {
-        ensureAudioStarts();
-        setStage('open');
-      }
-    };
-
-    const down = (e: PointerEvent) => {
-      isDrawing = true;
-      wipeAt(e.clientX, e.clientY);
-    };
-    const move = (e: PointerEvent) => {
-      if (isDrawing) wipeAt(e.clientX, e.clientY);
-    };
-    const up = () => {
-      isDrawing = false;
-    };
-
-    canvas.addEventListener('pointerdown', down);
-    canvas.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    return () => {
-      canvas.removeEventListener('pointerdown', down);
-      canvas.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-    };
-  }, [stage]);
+  }, [card.occasion, card.accentColor, card.greeting, card.photos, isLocked, isExpired, isPendingApproval]);
 
   const handleDodgeNoButton = () => {
     const zone = dodgeZoneRef.current;
-    const maxW = zone ? Math.max(80, Math.min(150, zone.clientWidth / 2 - 70)) : 95;
-    const maxH = 58;
-    const nx = (Math.random() * 2 - 1) * maxW;
-    const ny = (Math.random() * 2 - 1) * maxH;
-    setNoBtnPos({ x: nx, y: ny });
+    const maxW = zone ? Math.max(70, Math.min(140, zone.clientWidth / 2 - 65)) : 90;
+    const maxH = 52;
+    setNoBtnPos({
+      x: (Math.random() * 2 - 1) * maxW,
+      y: (Math.random() * 2 - 1) * maxH,
+    });
     setNoAttempts((n) => n + 1);
   };
 
@@ -599,27 +976,17 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
     }
   };
 
-  const handleCopyUrl = async () => {
-    try {
-      await navigator.clipboard.writeText(buildCardShareUrl(card.code));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    } catch {
-      // ignore
-    }
-  };
-
-  // Trạng thái bị Admin khóa
+  // Trạng thái bị khóa hoặc từ chối duyệt
   if (isLocked) {
     return (
-      <div className="min-h-screen bg-[#14100E] text-[#F7F1E8] flex items-center justify-center p-4">
-        <div className="max-w-md w-full rounded-2xl border border-[#E6BE73]/25 bg-[#1B1512] p-6 space-y-4 text-center">
+      <div className="min-h-screen bg-[#0b1622] text-[#F7F1E8] flex items-center justify-center p-4">
+        <div className="max-w-md w-full rounded-2xl border border-[#E6BE73]/25 bg-[#111E2D] p-6 space-y-4 text-center">
           <div className="mx-auto w-12 h-12 rounded-xl bg-[#B83B4A]/20 text-[#F09D8B] flex items-center justify-center">
             <Lock className="w-6 h-6" />
           </div>
-          <h2 className="text-xl font-bold m-0">Thiệp này tạm thời bị khóa</h2>
+          <h2 className="text-xl font-bold m-0">Web thiệp đã bị từ chối hoặc tạm khóa</h2>
           <p className="text-sm text-[#C8BDB2] leading-relaxed m-0">
-            Quản trị viên đã tạm khóa đường dẫn <code className="text-[#E6BE73]">/c/{card.code}</code>. Nếu bạn là người tạo thiệp, vui lòng liên hệ shop để được hỗ trợ mở lại.
+            Quản trị viên đã từ chối duyệt hoặc tạm khóa web thiệp này. Vui lòng hoàn tất thanh toán hoặc liên hệ shop để được hỗ trợ.
           </p>
           {onBackHome && (
             <button
@@ -635,17 +1002,43 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
     );
   }
 
-  // Trạng thái hết hạn link theo gói
+  // Trạng thái đang chờ Admin duyệt thanh toán
+  if (isPendingApproval) {
+    return (
+      <div className="min-h-screen bg-[#0b1622] text-[#F7F1E8] flex items-center justify-center p-4">
+        <div className="max-w-md w-full rounded-2xl border border-amber-500/35 bg-[#111E2D] p-6 space-y-4 text-center">
+          <div className="mx-auto w-12 h-12 rounded-xl bg-amber-500/15 text-amber-300 flex items-center justify-center">
+            <Sparkles className="w-6 h-6 animate-pulse" />
+          </div>
+          <h2 className="text-xl font-bold m-0">Web thiệp đang chờ Admin duyệt</h2>
+          <p className="text-sm text-[#C8BDB2] leading-relaxed m-0">
+            Web thiệp này đang ở trạng thái <strong>Chờ duyệt thanh toán</strong>. Ngay sau khi Admin xác nhận, thiệp 3D và mã QR sẽ tự động được kích hoạt.
+          </p>
+          {onBackHome && (
+            <button
+              type="button"
+              onClick={onBackHome}
+              className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#E6BE73] text-[#1A1208] text-sm font-semibold cursor-pointer"
+            >
+              Về trang chủ {CONFIG.shopName}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Trạng thái hết hạn
   if (isExpired) {
     return (
-      <div className="min-h-screen bg-[#14100E] text-[#F7F1E8] flex items-center justify-center p-4">
-        <div className="max-w-md w-full rounded-2xl border border-[#E6BE73]/25 bg-[#1B1512] p-6 space-y-4 text-center">
+      <div className="min-h-screen bg-[#0b1622] text-[#F7F1E8] flex items-center justify-center p-4">
+        <div className="max-w-md w-full rounded-2xl border border-[#E6BE73]/25 bg-[#111E2D] p-6 space-y-4 text-center">
           <div className="mx-auto w-12 h-12 rounded-xl bg-[#E6BE73]/15 text-[#E6BE73] flex items-center justify-center">
             <Sparkles className="w-6 h-6" />
           </div>
           <h2 className="text-xl font-bold m-0">Đường dẫn thiệp đã hết hạn lưu trữ</h2>
           <p className="text-sm text-[#C8BDB2] leading-relaxed m-0">
-            Web thiệp <code className="text-[#E6BE73]">/c/{card.code}</code> đã kết thúc thời gian lưu giữ theo gói đã chọn. Cảm ơn bạn đã tin dùng {CONFIG.shopName}!
+            Web thiệp <code className="text-[#E6BE73]">/c/{card.code}</code> đã hết thời hạn lưu trữ theo gói đã chọn. Cảm ơn bạn đã tin dùng {CONFIG.shopName}!
           </p>
           {onBackHome && (
             <button
@@ -661,357 +1054,363 @@ export const CardExperience3D: React.FC<CardExperience3DProps> = ({
     );
   }
 
-  const occasionMeta =
-    CONFIG.occasions.find((o) => o.id === card.occasion) || CONFIG.occasions[0];
-
   return (
     <div
       className={`${
-        isPreview ? 'min-h-[540px] rounded-2xl border border-[#E6BE73]/25' : 'min-h-screen'
-      } bg-[#120E0C] text-[#F7F1E8] flex flex-col overflow-hidden`}
+        isPreview ? 'h-[560px] rounded-2xl border border-[#E6BE73]/25' : 'fixed inset-0'
+      } bg-[#0b1622] text-[#F7F1E8] flex flex-col overflow-hidden select-none`}
     >
-      {/* Thanh điều khiển âm thanh & liên kết phía trên (không backdrop-blur lên WebGL) */}
-      <div className="border-b border-[#E6BE73]/15 bg-[#181310] px-4 py-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5 min-w-0">
-          {onBackHome && !isPreview && (
-            <button
-              type="button"
-              onClick={onBackHome}
-              className="min-h-[40px] px-3 rounded-xl border border-[#E6BE73]/25 bg-[#221B17] text-xs font-medium text-[#F7F1E8] inline-flex items-center gap-1.5 cursor-pointer shrink-0"
-            >
-              <ArrowLeft className="w-3.5 h-3.5 text-[#E6BE73]" />
-              <span>Trang chủ</span>
-            </button>
-          )}
-          <div className="truncate">
-            <span className="text-xs text-[#E6BE73] font-medium">{occasionMeta.title}</span>
-            <span className="text-xs text-[#A89B8E] mx-1.5">·</span>
-            <span className="text-xs text-[#F7F1E8] font-semibold">
-              Gửi {effectiveRecipient}
-            </span>
-          </div>
-        </div>
+      {/* Không gian 3D toàn màn hình chuẩn tin1511/noelnt — link riêng chỉ hiện thiệp */}
+      <div className="relative flex-1 min-h-0">
+        <div ref={canvasMountRef} className="absolute inset-0 cursor-grab active:cursor-grabbing" />
 
-        <div className="flex items-center gap-2 shrink-0">
-          {!isPreview && (
-            <button
-              type="button"
-              onClick={handleCopyUrl}
-              className="min-h-[40px] px-3 rounded-xl border border-[#E6BE73]/25 bg-[#221B17] text-xs text-[#F7F1E8] inline-flex items-center gap-1.5 cursor-pointer"
-            >
-              {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-[#E6BE73]" />}
-              <span className="hidden sm:inline">{copied ? 'Đã sao chép' : 'Sao chép link'}</span>
-            </button>
-          )}
+        {/* Nút tắt/bật nhạc góc trên phải gọn nhẹ như tin1511/noelnt */}
+        {card.bgmId !== 'none' && (
           <button
             type="button"
             onClick={handleToggleMute}
             aria-label={muted ? 'Bật nhạc nền' : 'Tắt nhạc nền'}
-            className="min-h-[40px] px-3 rounded-xl bg-[#261E19] hover:bg-[#322721] border border-[#E6BE73]/25 text-xs text-[#E6BE73] inline-flex items-center gap-1.5 cursor-pointer"
+            title={muted ? 'Bật nhạc nền' : 'Tắt nhạc nền'}
+            className="absolute top-3.5 right-3.5 z-10 w-10 h-10 rounded-full border border-[#ffd98a]/35 bg-[#08101a]/85 text-[#fff7ec] flex items-center justify-center cursor-pointer hover:border-[#ffd98a]"
           >
             {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-            <span className="hidden sm:inline">{muted ? 'Đang tắt nhạc' : 'Nhạc nền'}</span>
           </button>
+        )}
+
+        {/* Chỉ dẫn & nút mở thư ở cạnh dưới xuất hiện mượt sau khi hạt tụ xong giống hoàn toàn noelnt */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 pb-6 sm:pb-8 px-4 flex flex-col items-center gap-3 text-center z-10">
+          {stage === 2 && stageUiReady && card.occasion === 'to-tinh' && !toTinhAccepted && (
+            <div
+              ref={dodgeZoneRef}
+              className="animate-card-fade-up pointer-events-auto max-w-md w-full rounded-2xl bg-[#08101a]/95 border border-[#F09D8B]/40 p-4 sm:p-5 space-y-3 overflow-hidden"
+            >
+              <div className="flex items-center justify-center gap-2 text-[#F09D8B] text-xs font-semibold">
+                <Heart className="w-4 h-4" />
+                <span>{effectiveRecipient} ơi, {headlinePair[0]} {headlinePair[1]}</span>
+              </div>
+              <p className="text-xs text-[#cbd5e1] m-0">
+                {noAttempts > 0
+                  ? 'Nút Suy nghĩ lại chạy mất rồi, bấm Đồng ý luôn nhé!'
+                  : `${card.senderName} đang chờ câu trả lời từ bạn`}
+              </p>
+              <div className="relative min-h-[82px] flex items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setToTinhAccepted(true);
+                    ensureAudioStarts();
+                    goStageRef.current?.(3);
+                  }}
+                  className="min-h-[44px] px-6 rounded-full bg-[#ffd98a] text-[#1a1208] text-xs sm:text-sm font-bold cursor-pointer z-10"
+                >
+                  Đồng ý luôn
+                </button>
+                <button
+                  type="button"
+                  onMouseEnter={handleDodgeNoButton}
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    handleDodgeNoButton();
+                  }}
+                  onClick={handleDodgeNoButton}
+                  style={{
+                    transform: `translate(${noBtnPos.x}px, ${noBtnPos.y}px)`,
+                    transition: 'transform 160ms ease-out',
+                  }}
+                  className="min-h-[40px] px-4 rounded-full border border-[#ffd98a]/30 bg-[#111E2D] text-[#cbd5e1] text-xs cursor-pointer"
+                >
+                  Suy nghĩ lại
+                </button>
+              </div>
+            </div>
+          )}
+
+          {stage === 2 && stageUiReady && (card.occasion !== 'to-tinh' || toTinhAccepted) && (
+            <div className="animate-card-fade-up pointer-events-auto flex flex-col items-center gap-2.5">
+              <p className="text-xs sm:text-sm text-[#e2e8f0] opacity-75 m-0">
+                Chạm vào phong thư để mở
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  ensureAudioStarts();
+                  goStageRef.current?.(3);
+                }}
+                className="min-h-[44px] px-7 rounded-full bg-[#ffd98a] hover:bg-[#ffe5aa] text-[#1a1208] text-sm font-semibold cursor-pointer shadow-lg transition-transform active:scale-95"
+              >
+                Mở thư
+              </button>
+            </div>
+          )}
+
+          {stage === 3 && stageUiReady && (
+            <div className="animate-card-fade-up pointer-events-auto flex flex-col items-center gap-2.5">
+              <p className="text-xs sm:text-sm text-[#e2e8f0] opacity-75 m-0">
+                Kéo để xoay · chạm vào ảnh để xem
+              </p>
+              <button
+                type="button"
+                onClick={() => setLetterModalOpen(true)}
+                className="min-h-[44px] px-7 rounded-full bg-[#ffd98a] hover:bg-[#ffe5aa] text-[#1a1208] text-sm font-semibold inline-flex items-center gap-2 cursor-pointer shadow-lg transition-transform active:scale-95"
+              >
+                <BookOpen className="w-4 h-4" />
+                <span>Đọc lá thư</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* GIAI ĐOẠN MỞ THƯ (OPEN): Cây thông/hình 3D + ảnh bên trái (hoặc trên mobile), Thư bên phải (hoặc dưới mobile) */}
-      {stage === 'open' ? (
-        <div className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Khối trái / trên: Sân khấu 3D + bộ ảnh kỷ niệm treo */}
-          <div className="lg:col-span-6 space-y-4">
-            <div className="relative h-[300px] sm:h-[360px] rounded-2xl border border-[#E6BE73]/20 bg-[#191310] overflow-hidden">
-              <div ref={canvasMountRef} className="absolute inset-0" />
-              <div className="pointer-events-none absolute top-3 left-3 right-3 flex items-center justify-between text-xs text-[#D7CCC0]">
-                <span className="font-medium text-[#E6BE73]">{occasionMeta.particleShapeLabel}</span>
-                <span className="text-[#A89B8E]">Chạm để xoay 3D</span>
-              </div>
-            </div>
-
-            {/* Album ảnh kỷ niệm treo cùng khung hình */}
-            {card.photos.length > 0 && (
-              <div className="space-y-2.5">
-                <p className="text-xs font-medium text-[#E6BE73] m-0">
-                  Kỷ niệm lưu giữ ({card.photos.length} ảnh · chạm để phóng to)
-                </p>
-                <div className="grid grid-cols-3 gap-2.5">
-                  {card.photos.map((photo, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => setLightboxPhoto(photo)}
-                      className="group relative aspect-square rounded-xl overflow-hidden border border-[#E6BE73]/25 bg-[#1B1512] cursor-pointer p-0"
-                    >
-                      <img
-                        src={photo.url}
-                        alt={photo.caption || `Kỷ niệm ${idx + 1}`}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                      />
-                      {photo.caption && (
-                        <div className="absolute inset-x-0 bottom-0 bg-black/70 px-1.5 py-1 text-[10px] text-[#F7F1E8] truncate">
-                          {photo.caption}
-                        </div>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Khối phải / dưới: Bức thư ấm áp + ghi âm giọng nói */}
-          <div className="lg:col-span-6 rounded-2xl border border-[#E6BE73]/30 bg-[#1D1612] p-5 sm:p-8 space-y-5">
-            <div className="space-y-1.5 border-b border-[#E6BE73]/15 pb-4">
-              <p className="text-xs font-medium text-[#E6BE73] m-0">
-                Thư gửi {effectiveRecipient}
-              </p>
-              <h2 className="font-script text-3xl sm:text-4xl text-[#F7F1E8] m-0 leading-tight">
-                {card.greeting}
-              </h2>
-            </div>
-
-            {card.voiceAudioUrl && (
-              <div className="rounded-xl border border-[#E6BE73]/30 bg-[#14100E] p-3.5 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-9 h-9 rounded-lg bg-[#E6BE73]/15 text-[#E6BE73] flex items-center justify-center shrink-0">
-                    <Music2 className="w-4 h-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-xs font-semibold text-[#F7F1E8] truncate">
-                      Lời nhắn giọng nói từ {card.senderName}
-                    </div>
-                    <div className="text-[11px] text-[#A89B8E]">
-                      {voicePlaying ? 'Đang phát ghi âm...' : 'Nhấn để nghe giọng nói thật'}
-                    </div>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={toggleVoiceAudio}
-                  className="min-h-[40px] px-4 rounded-xl bg-[#E6BE73] text-[#1A1208] text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
-                >
-                  {voicePlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                  <span>{voicePlaying ? 'Tạm dừng' : 'Nghe'}</span>
-                </button>
-              </div>
-            )}
-
-            <div className="space-y-3 text-sm sm:text-base text-[#EAE0D5] leading-[1.8] whitespace-pre-line">
-              {card.letter}
-            </div>
-
-            <div className="pt-4 border-t border-[#E6BE73]/15 flex items-end justify-between gap-4">
-              <div className="text-xs text-[#A89B8E]">
-                Tạo riêng tại {CONFIG.shopName}
-              </div>
-              <div className="text-right">
-                <div className="text-xs text-[#A89B8E]">Thương mến,</div>
-                <div className="font-script text-2xl text-[#E6BE73] font-bold">
-                  {card.senderName}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : (
-        /* CÁC BƯỚC TRÌNH DIỄN HẠT 3D THEO TRÌNH TỰ */
-        <div className="relative flex-1 min-h-[460px] flex flex-col">
-          <div ref={canvasMountRef} className="absolute inset-0" />
-
-          <div className="relative z-10 flex-1 flex flex-col items-center justify-end p-5 sm:p-8 text-center">
-            {stage === 'particles' && (
-              <div className="max-w-md rounded-2xl bg-[#181310]/90 border border-[#E6BE73]/25 p-5 space-y-3">
-                <p className="text-xs font-medium text-[#E6BE73] m-0">
-                  Đang thắp sáng những hạt kỷ niệm...
-                </p>
-                <h2 className="font-script text-3xl text-[#F7F1E8] m-0">{card.greeting}</h2>
-                <button
-                  type="button"
-                  onClick={() => {
-                    ensureAudioStarts();
-                    setStage('greeting');
-                  }}
-                  className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#E6BE73] text-[#1A1208] text-sm font-semibold inline-flex items-center gap-2 cursor-pointer"
-                >
-                  <span>Chạm để mở thiệp</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-              </div>
-            )}
-
-            {stage === 'greeting' && (
-              <div className="max-w-md w-full rounded-2xl bg-[#181310]/92 border border-[#E6BE73]/30 p-6 space-y-4">
-                <p className="text-xs font-medium text-[#E6BE73] m-0">
-                  Từ {card.senderName} gửi tặng
-                </p>
-                <h2 className="font-script text-4xl text-[#F7F1E8] m-0 leading-tight">
-                  {effectiveRecipient}
-                </h2>
-                <p className="text-sm text-[#D7CCC0] m-0">{card.greeting}</p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    ensureAudioStarts();
-                    if (card.occasion === 'to-tinh' || card.photos.length > 0) {
-                      setStage('couple-or-question');
-                    } else {
-                      setStage('envelope');
-                    }
-                  }}
-                  className="w-full min-h-[46px] rounded-xl bg-[#E6BE73] hover:bg-[#F0CC88] text-[#1A1208] text-sm font-semibold inline-flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <span>Tiếp tục khám phá</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-              </div>
-            )}
-
-            {stage === 'couple-or-question' && card.occasion === 'to-tinh' && (
+      {/* Modal Phong Thư Mở Nắp -> Rút Lá Thư Ra Ngoài -> Hiện Từng Chữ */}
+      {letterModalOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-[#050a12]/90 flex items-center justify-center p-4 overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setLetterModalOpen(false);
+          }}
+        >
+          {letterAnimPhase !== 'typing_text' ? (
+            /* GIAI ĐOẠN 1 & 2: PHONG BÌ MỞ NẮP 3D VÀ RÚT BỨC THƯ RA NGOÀI */
+            <div
+              key={`env-stage-${replayLetterKey}`}
+              className="relative my-auto w-full max-w-[440px] h-[340px] flex items-center justify-center select-none"
+              style={{ perspective: '1100px' }}
+            >
+              {/* Thân dưới / Mặt lưng phong bì */}
               <div
-                ref={dodgeZoneRef}
-                className="max-w-md w-full rounded-2xl bg-[#181310]/95 border border-[#F09D8B]/40 p-6 space-y-5 overflow-hidden"
+                className={`relative w-[330px] sm:w-[380px] h-[230px] rounded-xl bg-[#c99b72] border border-[#e6be73]/45 shadow-2xl transition-all duration-700 ${
+                  letterAnimPhase === 'pulling_letter'
+                    ? 'translate-y-16 scale-95 opacity-75'
+                    : 'translate-y-4 scale-100 opacity-100'
+                }`}
               >
-                <Heart className="w-8 h-8 text-[#F09D8B] mx-auto" />
-                <div className="space-y-1.5">
-                  <h2 className="font-script text-3xl text-[#F7F1E8] m-0">
-                    {effectiveRecipient} ơi, {card.greeting}
-                  </h2>
-                  <p className="text-xs text-[#C8BDB2] m-0">
-                    {noAttempts > 0
-                      ? 'Nút kia ngại quá nên chạy mất rồi, chọn Đồng ý đi mà!'
-                      : `${card.senderName} đang hồi hộp chờ câu trả lời của bạn`}
-                  </p>
+                {/* Lòng trong phong bì */}
+                <div className="absolute inset-1.5 rounded-lg bg-[#6e482e] overflow-visible">
+                  {/* Tờ giấy thư bên trong đang được rút dần lên trên ra ngoài phong bì */}
+                  <div
+                    className={`absolute left-3 right-3 rounded-md bg-[#fff7ec] text-[#2a1a1c] p-4 sm:p-5 shadow-xl border border-[#e2ceb5] transition-all duration-700 ease-out ${
+                      letterAnimPhase === 'pulling_letter'
+                        ? '-top-32 h-[265px] scale-[1.03]'
+                        : 'top-3 h-[185px] scale-95'
+                    }`}
+                  >
+                    <div className="border-b border-[#d9c3b8] pb-2 flex items-center justify-between">
+                      <div>
+                        <div className="text-[11px] font-medium text-[#7c5c4b]">Thư gửi</div>
+                        <div className="text-sm sm:text-base font-bold text-[#2a1a1c] truncate">
+                          {effectiveRecipient}
+                        </div>
+                      </div>
+                      <Heart className="w-4 h-4 text-[#b83b4a] shrink-0" />
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      <div className="h-2.5 w-4/5 rounded bg-[#e8d5be]" />
+                      <div className="h-2.5 w-full rounded bg-[#efe0cd]" />
+                      <div className="h-2.5 w-3/4 rounded bg-[#e8d5be]" />
+                      <div className="h-2.5 w-5/6 rounded bg-[#efe0cd]" />
+                    </div>
+                    <div className="mt-4 text-right text-xs italic text-[#7c5c4b]">
+                      {card.senderName}
+                    </div>
+                  </div>
                 </div>
 
-                <div className="relative min-h-[120px] flex flex-col sm:flex-row items-center justify-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      ensureAudioStarts();
-                      setStage('envelope');
-                    }}
-                    className="min-h-[48px] px-7 py-2.5 rounded-xl bg-[#E6BE73] hover:bg-[#F0CC88] text-[#1A1208] text-sm font-bold inline-flex items-center gap-2 cursor-pointer z-10"
-                  >
-                    <Heart className="w-4 h-4" />
-                    <span>Đồng ý luôn</span>
-                  </button>
+                {/* Vạt túi trước của phong bì (Che phần thân dưới của tờ thư khi đang rút lên) */}
+                <div
+                  className="absolute inset-0 rounded-xl pointer-events-none z-20"
+                  style={{
+                    background:
+                      'linear-gradient(155deg, transparent 43%, #d8ad84 43.5%, #c5956b 100%)',
+                  }}
+                />
+                <div
+                  className="absolute inset-0 rounded-xl pointer-events-none z-20"
+                  style={{
+                    background:
+                      'linear-gradient(205deg, transparent 43%, #cfa176 43.5%, #b9895f 100%)',
+                  }}
+                />
+                <div
+                  className="absolute inset-x-0 bottom-0 h-[58%] rounded-b-xl pointer-events-none z-20 border-t border-[#e6be73]/25"
+                  style={{
+                    background: 'linear-gradient(180deg, #deb48c 0%, #c49469 100%)',
+                    clipPath: 'polygon(0 100%, 50% 18%, 100% 100%)',
+                  }}
+                />
 
+                {/* Nắp phong bì tam giác phía trên mở lật 180 độ */}
+                <div
+                  className={`animate-envelope-flap absolute inset-x-0 top-0 h-[58%] pointer-events-none ${
+                    letterAnimPhase === 'pulling_letter' ? 'z-0' : 'z-30'
+                  }`}
+                  style={{
+                    background: 'linear-gradient(180deg, #e5bc93 0%, #c8986c 100%)',
+                    clipPath: 'polygon(0 0, 100% 0, 50% 100%)',
+                  }}
+                />
+
+                {/* Con dấu sáp đỏ ở giữa phong bì bung mở */}
+                <div className="animate-wax-seal absolute left-1/2 top-[52%] -translate-x-1/2 -translate-y-1/2 z-40 w-11 h-11 rounded-full bg-[#9e2a2b] border-2 border-[#ffd98a]/70 shadow-lg flex items-center justify-center text-[#ffd98a]">
+                  <Heart className="w-4 h-4 fill-current" />
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* GIAI ĐOẠN 3: BỨC THƯ ĐÃ ĐƯỢC LẤY RA NGOÀI & TỪNG CHỮ HIỆN LÊN */
+            <div
+              key={`letter-read-${replayLetterKey}`}
+              className="animate-letter-pullout my-auto w-full max-w-[560px] rounded-md bg-[#fff7ec] text-[#2a1a1c] p-6 sm:p-8 shadow-2xl space-y-4 border border-[#e5d2bc]"
+            >
+              <div className="border-b border-[#d9c3b8] pb-3 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-medium text-[#7c5c4b]">Thư gửi</div>
+                  <div className="text-lg font-bold text-[#2a1a1c]">{effectiveRecipient}</div>
+                </div>
+                <div className="flex items-center gap-1.5">
                   <button
                     type="button"
-                    onMouseEnter={handleDodgeNoButton}
-                    onPointerDown={(e) => {
-                      e.preventDefault();
-                      handleDodgeNoButton();
-                    }}
-                    onClick={handleDodgeNoButton}
-                    style={{
-                      transform: `translate(${noBtnPos.x}px, ${noBtnPos.y}px)`,
-                      transition: 'transform 160ms ease-out',
-                    }}
-                    className="min-h-[44px] px-5 py-2 rounded-xl border border-[#E6BE73]/30 bg-[#261E1A] text-[#C8BDB2] text-xs font-medium cursor-pointer select-none"
+                    onClick={() => setReplayLetterKey((k) => k + 1)}
+                    title="Xem lại hiệu ứng mở phong thư & từng chữ hiện lên"
+                    className="min-h-[36px] px-2.5 rounded-full bg-[#f5e6d3] hover:bg-[#ecd8be] text-[#5c3a28] text-xs font-medium inline-flex items-center gap-1 cursor-pointer"
                   >
-                    Suy nghĩ lại
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Mở lại thư</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLetterModalOpen(false)}
+                    aria-label="Đóng lá thư"
+                    className="min-h-[38px] min-w-[38px] rounded-full bg-[#f5e6d3] text-[#2a1a1c] flex items-center justify-center cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
                   </button>
                 </div>
               </div>
-            )}
 
-            {stage === 'couple-or-question' && card.occasion !== 'to-tinh' && (
-              <div className="max-w-sm w-full rounded-2xl bg-[#181310]/94 border border-[#E6BE73]/30 p-5 space-y-4">
-                {card.photos[0] && (
-                  <div className="aspect-[4/3] rounded-xl overflow-hidden border border-[#E6BE73]/25">
-                    <img
-                      src={card.photos[0].url}
-                      alt={card.photos[0].caption || 'Khoảnh khắc kỷ niệm'}
-                      className="w-full h-full object-cover"
-                    />
+              {card.voiceAudioUrl && (
+                <div className="rounded-lg border border-[#d9c3b8] bg-[#f7ecdc] p-3 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Music2 className="w-4 h-4 text-[#9a3412] shrink-0" />
+                    <div className="text-xs text-[#2a1a1c] truncate">
+                      <strong>Lời nhắn giọng nói</strong> từ {card.senderName}
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={toggleVoiceAudio}
+                    className="min-h-[36px] px-3.5 rounded-full bg-[#ffd98a] text-[#1a1208] text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+                  >
+                    {voicePlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                    <span>{voicePlaying ? 'Tạm dừng' : 'Nghe'}</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Nội dung bức thư hiện lên từng chữ (Chạm vào nội dung để hiện toàn bộ ngay nếu muốn) */}
+              <div
+                onClick={() => {
+                  if (typedCharCount < totalLetterChars) {
+                    setTypedCharCount(totalLetterChars);
+                  }
+                }}
+                title={
+                  typedCharCount < totalLetterChars
+                    ? 'Chạm vào thư để hiện toàn bộ chữ ngay'
+                    : undefined
+                }
+                className="space-y-3.5 text-[1rem] leading-[1.85] text-[#2a1a1c] min-h-[120px] cursor-pointer"
+              >
+                {(() => {
+                  let consumed = 0;
+                  return letterParagraphs.map((para, idx) => {
+                    const start = consumed;
+                    const end = start + para.length;
+                    consumed = end + 2; // +2 cho '\n\n' giữa các đoạn
+                    if (typedCharCount <= start && idx > 0) return null;
+                    const visibleLen = Math.max(0, Math.min(para.length, typedCharCount - start));
+                    const visibleText = para.slice(0, visibleLen);
+                    const isCurrentTypingPara =
+                      typedCharCount < totalLetterChars &&
+                      typedCharCount >= start &&
+                      typedCharCount <= end;
+
+                    return (
+                      <p key={idx} className="m-0 whitespace-pre-line">
+                        {visibleText}
+                        {isCurrentTypingPara && (
+                          <span className="animate-caret-blink inline-block ml-0.5 w-[2px] h-[1.05em] align-middle bg-[#8c4a27]" />
+                        )}
+                      </p>
+                    );
+                  });
+                })()}
+              </div>
+
+              {/* Chữ ký người gửi hiện lên mượt mà sau khi viết xong nội dung thư */}
+              <div
+                className={`pt-2 text-right italic text-[1.05rem] font-semibold text-[#5c3a28] transition-all duration-500 ${
+                  typedCharCount >= totalLetterChars
+                    ? 'opacity-100 translate-y-0'
+                    : 'opacity-0 translate-y-2'
+                }`}
+              >
+                {card.senderName}
+              </div>
+
+              <div className="pt-2 flex items-center justify-between gap-3">
+                {typedCharCount < totalLetterChars ? (
+                  <button
+                    type="button"
+                    onClick={() => setTypedCharCount(totalLetterChars)}
+                    className="text-xs text-[#7c5c4b] underline bg-transparent border-0 p-0 cursor-pointer"
+                  >
+                    Hiện toàn bộ chữ ngay
+                  </button>
+                ) : (
+                  <span />
                 )}
-                <p className="text-sm text-[#F7F1E8] font-medium m-0">
-                  {card.photos[0]?.caption || `Khoảnh khắc đặc biệt cùng ${effectiveRecipient}`}
-                </p>
                 <button
                   type="button"
-                  onClick={() => {
-                    ensureAudioStarts();
-                    setStage('envelope');
-                  }}
-                  className="w-full min-h-[46px] rounded-xl bg-[#E6BE73] text-[#1A1208] text-sm font-semibold cursor-pointer"
+                  onClick={() => setLetterModalOpen(false)}
+                  className="min-h-[42px] px-6 rounded-full bg-[#ffd98a] text-[#1a1208] text-sm font-semibold cursor-pointer"
                 >
-                  Mở phong thư bí mật
+                  Đóng
                 </button>
               </div>
-            )}
-
-            {stage === 'envelope' && (
-              <div className="max-w-md w-full rounded-2xl bg-[#181310]/95 border border-[#E6BE73]/35 p-5 space-y-4">
-                <div className="flex items-center justify-between text-xs text-[#E6BE73]">
-                  <span className="inline-flex items-center gap-1.5 font-medium">
-                    <Hand className="w-4 h-4" />
-                    <span>Phong thư lau sương</span>
-                  </span>
-                  <span className="tabular-nums">{frostClearedPct}%</span>
-                </div>
-
-                {/* Phong thư thật nằm dưới, lớp sương giá Canvas phủ lên trên để người dùng lau */}
-                <div className="relative h-[220px] rounded-xl overflow-hidden border border-[#E6BE73]/30 bg-[#2B2019] flex flex-col items-center justify-center p-4 select-none">
-                  <div className="space-y-2 text-center">
-                    <p className="font-script text-3xl text-[#E6BE73] m-0">
-                      Gửi {effectiveRecipient}
-                    </p>
-                    <p className="text-xs text-[#EAE0D5] m-0">
-                      Một bức thư viết riêng từ {card.senderName}
-                    </p>
-                  </div>
-                  <canvas
-                    ref={frostCanvasRef}
-                    className="absolute inset-0 w-full h-full touch-none cursor-crosshair"
-                  />
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    ensureAudioStarts();
-                    setStage('open');
-                  }}
-                  className="w-full min-h-[44px] rounded-xl border border-[#E6BE73]/35 bg-[#251D19] hover:bg-[#312620] text-[#F7F1E8] text-xs font-medium cursor-pointer"
-                >
-                  Mở thư ngay
-                </button>
-              </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Lightbox xem ảnh lớn */}
+      {/* Lightbox Ảnh Polaroid khi chạm vào ảnh treo trên mô hình 3D */}
       {lightboxPhoto && (
         <div
-          className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-[#050a12]/90 flex items-center justify-center p-4"
           onClick={() => setLightboxPhoto(null)}
         >
           <div
-            className="max-w-lg w-full rounded-2xl border border-[#E6BE73]/30 bg-[#1B1512] p-4 space-y-3"
+            className="animate-card-modal-pop max-w-md w-full text-center space-y-3"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-medium text-[#F7F1E8] truncate">
-                {lightboxPhoto.caption || 'Ảnh kỷ niệm'}
-              </span>
+            <div className="inline-block bg-[#fff7ec] p-3 pb-8 rounded-sm shadow-2xl">
+              <img
+                src={lightboxPhoto.url}
+                alt={lightboxPhoto.caption || 'Ảnh kỷ niệm'}
+                className="max-w-full max-h-[64vh] object-contain block"
+              />
+            </div>
+            {lightboxPhoto.caption && (
+              <p className="text-sm text-[#fff7ec] m-0">{lightboxPhoto.caption}</p>
+            )}
+            <div>
               <button
                 type="button"
                 onClick={() => setLightboxPhoto(null)}
-                className="min-h-[38px] min-w-[38px] rounded-lg bg-[#261E1A] text-[#F7F1E8] flex items-center justify-center cursor-pointer"
+                className="min-h-[40px] px-5 rounded-full bg-[#ffd98a] text-[#1a1208] text-xs font-semibold cursor-pointer"
               >
-                <X className="w-4 h-4" />
+                Đóng ảnh
               </button>
             </div>
-            <img
-              src={lightboxPhoto.url}
-              alt={lightboxPhoto.caption || 'Ảnh kỷ niệm'}
-              className="w-full max-h-[68vh] object-contain rounded-xl bg-black/30"
-            />
           </div>
         </div>
       )}

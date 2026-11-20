@@ -26,6 +26,7 @@ import {
   fetchGiftSets,
   fetchPricingTiers,
   fetchWebCardByCode,
+  subscribeToWebCardByCode,
 } from './firebase';
 import { HeroParticleDemo } from './components/HeroParticleDemo';
 import { CardExperience3D } from './components/CardExperience3D';
@@ -78,6 +79,21 @@ export default function App() {
     cardCode?: string;
   } | null>(null);
 
+  const [savedCardSession, setSavedCardSession] = useState<{
+    order: ShopOrderRecord;
+    cardCode?: string;
+  } | null>(() => {
+    try {
+      const raw = localStorage.getItem('last_webcard_payment_v1');
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.order && parsed.order.orderCode) return parsed;
+    } catch {
+      // ignore
+    }
+    return null;
+  });
+
   // Tải Web thiệp công khai ở route /c/:code
   const [loadedCard, setLoadedCard] = useState<WebCardRecord | null>(null);
   const [loadingCard, setLoadingCard] = useState<boolean>(false);
@@ -115,7 +131,7 @@ export default function App() {
     refreshStoreData();
   }, [refreshStoreData]);
 
-  // Tải cấu hình thiệp khi truy cập /c/<code>
+  // Tải & lắng nghe thời gian thực cấu hình thiệp khi truy cập /c/<code>
   useEffect(() => {
     if (route.view !== 'card') return;
     let active = true;
@@ -137,8 +153,22 @@ export default function App() {
       .finally(() => {
         if (active) setLoadingCard(false);
       });
+
+    const unsub = subscribeToWebCardByCode(route.code, (card) => {
+      if (!active) return;
+      setLoadingCard(false);
+      if (!card) {
+        setCardNotFound(true);
+        setLoadedCard(null);
+      } else {
+        setCardNotFound(false);
+        setLoadedCard(card);
+      }
+    });
+
     return () => {
       active = false;
+      unsub();
     };
   }, [route]);
 
@@ -192,7 +222,26 @@ export default function App() {
             openWizard('noel', 'custom', giftOrderId || null);
           }}
           onShowLegal={() => setLegalOpen(true)}
+          onOpenPaymentForOrder={(order, cardCode) => {
+            setActivePaymentModal({ order, cardCode });
+          }}
         />
+        {activePaymentModal && (
+          <VietQrModal
+            order={activePaymentModal.order}
+            cardCode={activePaymentModal.cardCode}
+            onClose={() => setActivePaymentModal(null)}
+            onOpenCardLink={(code) => {
+              setActivePaymentModal(null);
+              navigateTo(`/c/${code}`);
+            }}
+            onCreateFreeGiftCard={(giftOrderId) => {
+              setActivePaymentModal(null);
+              navigateTo('/');
+              openWizard('noel', 'custom', giftOrderId);
+            }}
+          />
+        )}
         {legalOpen && (
           <LegalModal onClose={() => setLegalOpen(false)} />
         )}
@@ -358,6 +407,38 @@ export default function App() {
       </header>
 
       <main className="flex-1">
+        {savedCardSession && (
+          <div className="bg-[#1E1713] border-b border-[#E6BE73]/25">
+            <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="text-[#E6BE73] font-medium">
+                Đơn Web thiệp <strong className="font-mono">{savedCardSession.order.orderCode}</strong> vừa tạo · Bấm để xem trạng thái <strong>Chờ duyệt</strong> hoặc nhận <strong>Link thiệp &amp; Mã QR</strong> khi Admin đã duyệt.
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActivePaymentModal(savedCardSession)}
+                  className="min-h-[32px] px-3 rounded-lg bg-[#E6BE73] text-[#1A1208] text-xs font-semibold cursor-pointer"
+                >
+                  Xem trạng thái / Nhận Link &amp; QR
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSavedCardSession(null);
+                    try {
+                      localStorage.removeItem('last_webcard_payment_v1');
+                    } catch {
+                      // ignore
+                    }
+                  }}
+                  className="min-h-[32px] px-2 rounded-lg border border-[#E6BE73]/20 bg-[#14100E] text-[#A89B8E] text-xs cursor-pointer"
+                >
+                  Ẩn
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {/* HERO SECTION + DEMO HẠT 3D CHẠY THẬT */}
         <section className="border-b border-[#E6BE73]/12 bg-[radial-gradient(ellipse_at_top,rgba(184,59,74,0.14)_0%,rgba(20,16,14,0)_60%)]">
           <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-14 lg:py-16">
@@ -745,7 +826,14 @@ export default function App() {
         onSuccessCreated={(card, order) => {
           setWizardOpen(false);
           setFreeGiftOrderId(null);
-          setActivePaymentModal({ order, cardCode: card.code });
+          const session = { order, cardCode: card.code };
+          setActivePaymentModal(session);
+          setSavedCardSession(session);
+          try {
+            localStorage.setItem('last_webcard_payment_v1', JSON.stringify(session));
+          } catch {
+            // ignore
+          }
         }}
       />
 

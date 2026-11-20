@@ -60,26 +60,26 @@ export interface FaqItem {
 
 export const CONFIG = {
   // 1. THÔNG TIN CỬA HÀNG (Thay placeholder [...] bằng thông tin thật của bạn)
-  shopName: '[TÊN SHOP]',
+  shopName: '[DTD]',
   shopTagline: 'Quà tặng cảm xúc & Web thiệp 3D theo yêu cầu',
   shopStory:
     'Mỗi hộp quà trao tay đi kèm một trang web thiệp 3D riêng tư — nơi lưu giữ ảnh kỷ niệm, giọng nói và bức thư bạn tự tay viết.',
 
   // 2. CẤU HÌNH QUẢN TRỊ VIÊN (/admin) - KHÔNG BAO GIỜ LƯU MẬT KHẨU TRONG CODE
   // Thay '[EMAIL_ADMIN_CUA_BAN]' bằng email bạn tạo cho tài khoản "admin" trong Firebase Console -> Authentication
-  adminEmail: '[EMAIL_ADMIN_CUA_BAN]',
+  adminEmail: '[lettersdtd@gmail.com]',
   // Danh sách email Google được phép vào /admin (bên cạnh tài khoản có document trong Firestore collection "admins/<UID>")
-  adminAllowedEmails: ['[EMAIL_ADMIN_CUA_BAN]', 'dthong.design2016@gmail.com'],
+  adminAllowedEmails: ['[lettersdtd@gmail.com]'],
   adminMaxFailedAttempts: 5,
   adminLockoutMs: 5 * 60 * 1000, // Khóa 5 phút sau 5 lần đăng nhập sai liên tiếp
 
   // 3. LIÊN HỆ ZALO / FACEBOOK (Điền sau)
   contact: {
-    zaloPhone: '[SỐ ZALO CỦA BẠN]',
-    zaloUrl: 'https://zalo.me/[SO_ZALO_CUA_BAN]',
-    facebookName: '[TÊN FANPAGE FACEBOOK]',
-    facebookUrl: 'https://facebook.com/[FANPAGE_CUA_BAN]',
-    email: '[EMAIL_LIEN_HE]',
+    zaloPhone: '[0788205852]',
+    zaloUrl: 'https://zalo.me/0788205852',
+    facebookName: '[DTDLetters]',
+    facebookUrl: 'https://www.facebook.com/profile.php?id=61596760138650',
+    email: '[lettersdtd@gmail.com]',
     workingHours: '08:30 – 22:00 hàng ngày (kể cả Cuối tuần & Lễ)',
   },
 

@@ -4,6 +4,7 @@ import QRCode from 'qrcode';
 import {
   ArrowLeft,
   Check,
+  Clock,
   Copy,
   Download,
   ExternalLink,
@@ -11,6 +12,7 @@ import {
   KeyRound,
   LogOut,
   MailCheck,
+  QrCode,
   ShieldAlert,
   Sparkles,
   Trash2,
@@ -30,6 +32,8 @@ import {
   logoutAccount,
   registerCustomerAccount,
   sendPasswordResetForEmail,
+  subscribeToMyOrders,
+  subscribeToMyWebCards,
 } from '../firebase';
 
 interface AccountPageProps {
@@ -38,6 +42,7 @@ interface AccountPageProps {
   onOpenCard: (code: string) => void;
   onCreateNewCard: (giftOrderId?: string) => void;
   onShowLegal: () => void;
+  onOpenPaymentForOrder?: (order: ShopOrderRecord, cardCode?: string) => void;
 }
 
 export const AccountPage: React.FC<AccountPageProps> = ({
@@ -46,6 +51,7 @@ export const AccountPage: React.FC<AccountPageProps> = ({
   onOpenCard,
   onCreateNewCard,
   onShowLegal,
+  onOpenPaymentForOrder,
 }) => {
   const [authTab, setAuthTab] = useState<'login' | 'register' | 'reset'>('login');
   const [displayName, setDisplayName] = useState('');
@@ -75,26 +81,33 @@ export const AccountPage: React.FC<AccountPageProps> = ({
 
   const googleOnly = isGoogleOnlyAccount(currentUser);
 
-  const loadAccountData = async (uid: string) => {
-    setLoadingData(true);
-    try {
-      const [cards, orders] = await Promise.all([fetchMyWebCards(uid), fetchMyOrders(uid)]);
-      setMyCards(cards);
-      setMyOrders(orders);
-    } catch {
-      // ignore initial query errors
-    } finally {
-      setLoadingData(false);
-    }
-  };
-
   useEffect(() => {
-    if (currentUser) {
-      loadAccountData(currentUser.uid);
-    } else {
+    if (!currentUser) {
       setMyCards([]);
       setMyOrders([]);
+      setLoadingData(false);
+      return;
     }
+    setLoadingData(true);
+    Promise.all([fetchMyWebCards(currentUser.uid), fetchMyOrders(currentUser.uid)])
+      .then(([cards, orders]) => {
+        setMyCards(cards);
+        setMyOrders(orders);
+      })
+      .catch(() => {})
+      .finally(() => setLoadingData(false));
+
+    const unsubCards = subscribeToMyWebCards(currentUser.uid, (cards) => {
+      setMyCards(cards);
+      setLoadingData(false);
+    });
+    const unsubOrders = subscribeToMyOrders(currentUser.uid, (orders) => {
+      setMyOrders(orders);
+    });
+    return () => {
+      unsubCards();
+      unsubOrders();
+    };
   }, [currentUser?.uid]);
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
@@ -162,14 +175,18 @@ export const AccountPage: React.FC<AccountPageProps> = ({
 
   const handleDownloadQrPng = async (code: string) => {
     try {
-      const url = await QRCode.toDataURL(buildCardShareUrl(code), {
-        width: 600,
-        margin: 2,
-        color: { dark: '#1A1208', light: '#FFFBF3' },
-      });
+      const { generateHeartQrDataUrl } = await import('../heartQr');
+      const shareUrl = buildCardShareUrl(code);
+      const url =
+        generateHeartQrDataUrl(shareUrl) ||
+        (await QRCode.toDataURL(shareUrl, {
+          width: 600,
+          margin: 2,
+          color: { dark: '#1A1208', light: '#FFFBF3' },
+        }));
       const a = document.createElement('a');
       a.href = url;
-      a.download = `ma-qr-thiep-${code}.png`;
+      a.download = `qr-trai-tim-${code}.png`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -454,7 +471,13 @@ export const AccountPage: React.FC<AccountPageProps> = ({
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {myCards.map((c) => {
-                    const fullUrl = buildCardShareUrl(c.code);
+                    const isCardApproved = c.status === 'active' && !c.locked;
+                    const isCardRejected = c.locked || c.status === 'expired';
+                    const fullUrl = isCardApproved ? buildCardShareUrl(c.code) : '';
+                    const linkedOrder = myOrders.find(
+                      (o) => o.orderCode === c.orderCode || o.cardCode === c.code
+                    );
+
                     return (
                       <div
                         key={c.code}
@@ -463,18 +486,20 @@ export const AccountPage: React.FC<AccountPageProps> = ({
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <div className="text-xs text-[#E6BE73] font-medium">
-                              /c/{c.code} · {c.tier === 'basic' ? 'Cơ bản' : c.tier === 'custom' ? 'Tùy chỉnh' : 'Cao cấp'}
+                              Gói {c.tier === 'basic' ? 'Cơ bản' : c.tier === 'custom' ? 'Tùy chỉnh' : 'Cao cấp'} · Mã đơn: {c.orderCode || c.code}
                             </div>
                             <h3 className="text-base font-bold text-[#F7F1E8] m-0 mt-0.5">
                               Gửi: {c.recipientName}
                             </h3>
                             <p className="text-xs text-[#B8ABA0] m-0 mt-0.5">
                               {formatExpiry(c.expiresAtMs)} ·{' '}
-                              {c.locked
-                                ? 'Đang bị tạm khóa'
-                                : c.status === 'active'
-                                  ? 'Đã mở hoạt động'
-                                  : 'Chờ xác nhận thanh toán'}
+                              {isCardRejected ? (
+                                <span className="text-rose-300 font-semibold">Đã từ chối / Đã khóa</span>
+                              ) : isCardApproved ? (
+                                <span className="text-emerald-300 font-semibold">Đã duyệt (Có link &amp; Mã QR)</span>
+                              ) : (
+                                <span className="text-amber-300 font-semibold">Chờ duyệt</span>
+                              )}
                             </p>
                           </div>
                           <span className="text-sm font-bold text-[#E6BE73] tabular-nums">
@@ -482,40 +507,79 @@ export const AccountPage: React.FC<AccountPageProps> = ({
                           </span>
                         </div>
 
-                        <div className="px-3 py-1.5 rounded-lg bg-[#14100E] text-xs font-mono text-[#D7CCC0] truncate">
-                          {fullUrl}
-                        </div>
+                        {isCardApproved ? (
+                          <>
+                            <div className="px-3 py-1.5 rounded-lg bg-[#14100E] text-xs font-mono text-[#D7CCC0] truncate">
+                              {fullUrl}
+                            </div>
 
-                        <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => onOpenCard(c.code)}
-                            className="min-h-[38px] px-3 rounded-lg bg-[#E6BE73] text-[#1A1208] text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
-                          >
-                            <ExternalLink className="w-3.5 h-3.5" />
-                            <span>Xem thiệp</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleCopyCardUrl(c.code)}
-                            className="min-h-[38px] px-3 rounded-lg border border-[#E6BE73]/25 bg-[#14100E] text-xs text-[#F7F1E8] inline-flex items-center gap-1.5 cursor-pointer"
-                          >
-                            {copiedCode === c.code ? (
-                              <Check className="w-3.5 h-3.5 text-emerald-400" />
-                            ) : (
-                              <Copy className="w-3.5 h-3.5 text-[#E6BE73]" />
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => onOpenCard(c.code)}
+                                className="min-h-[38px] px-3 rounded-lg bg-[#E6BE73] text-[#1A1208] text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                                <span>Xem thiệp</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyCardUrl(c.code)}
+                                className="min-h-[38px] px-3 rounded-lg border border-[#E6BE73]/25 bg-[#14100E] text-xs text-[#F7F1E8] inline-flex items-center gap-1.5 cursor-pointer"
+                              >
+                                {copiedCode === c.code ? (
+                                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                ) : (
+                                  <Copy className="w-3.5 h-3.5 text-[#E6BE73]" />
+                                )}
+                                <span>{copiedCode === c.code ? 'Đã chép' : 'Sao chép link'}</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadQrPng(c.code)}
+                                className="min-h-[38px] px-3 rounded-lg border border-[#E6BE73]/25 bg-[#14100E] text-xs text-[#F7F1E8] inline-flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <Download className="w-3.5 h-3.5 text-[#E6BE73]" />
+                                <span>Tải QR</span>
+                              </button>
+                            </div>
+                          </>
+                        ) : isCardRejected ? (
+                          <div className="space-y-2.5">
+                            <div className="rounded-xl border border-rose-500/35 bg-rose-950/30 p-3 text-xs text-rose-200">
+                              <strong>Admin đã từ chối duyệt:</strong> Link web thiệp và mã QR không được cấp cho đơn này.
+                            </div>
+                            {linkedOrder && onOpenPaymentForOrder && (
+                              <button
+                                type="button"
+                                onClick={() => onOpenPaymentForOrder(linkedOrder, c.code)}
+                                className="min-h-[38px] px-3.5 rounded-lg border border-[#E6BE73]/30 bg-[#14100E] text-xs font-semibold text-[#E6BE73] inline-flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <QrCode className="w-3.5 h-3.5" />
+                                <span>Thanh toán lại &amp; Gửi lệnh duyệt</span>
+                              </button>
                             )}
-                            <span>{copiedCode === c.code ? 'Đã chép' : 'Sao chép link'}</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDownloadQrPng(c.code)}
-                            className="min-h-[38px] px-3 rounded-lg border border-[#E6BE73]/25 bg-[#14100E] text-xs text-[#F7F1E8] inline-flex items-center gap-1.5 cursor-pointer"
-                          >
-                            <Download className="w-3.5 h-3.5 text-[#E6BE73]" />
-                            <span>Tải QR</span>
-                          </button>
-                        </div>
+                          </div>
+                        ) : (
+                          <div className="space-y-2.5">
+                            <div className="rounded-xl border border-amber-500/35 bg-amber-950/25 p-3 text-xs text-amber-200 flex items-start gap-2">
+                              <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5 animate-spin" />
+                              <div>
+                                <strong>Chờ duyệt:</strong> Link web thiệp và mã QR sẽ tự động mở tại đây sau khi Admin duyệt thanh toán.
+                              </div>
+                            </div>
+                            {linkedOrder && onOpenPaymentForOrder && (
+                              <button
+                                type="button"
+                                onClick={() => onOpenPaymentForOrder(linkedOrder, c.code)}
+                                className="min-h-[38px] px-3.5 rounded-lg bg-[#E6BE73] text-[#1A1208] text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <QrCode className="w-3.5 h-3.5" />
+                                <span>Mở bảng Thanh toán / Chờ duyệt</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}

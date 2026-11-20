@@ -238,11 +238,12 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
   const handleAdminForgotPassword = async () => {
     setLoginMessage('');
-    const target =
+    const rawTarget =
       usernameInput.trim().toLowerCase() === 'admin'
         ? CONFIG.adminEmail
         : usernameInput.trim();
-    if (!target || target.includes('[') || !target.includes('@')) {
+    const target = rawTarget.replace(/^\[+|\]+$/g, '').trim();
+    if (!target || !target.includes('@')) {
       setLoginMessage(
         'Vui lòng điền email quản trị thật vào CONFIG.adminEmail hoặc ô tài khoản trước khi gửi đặt lại mật khẩu.'
       );
@@ -295,18 +296,29 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     }
   };
 
-  const handleToggleCardLock = async (card: WebCardRecord) => {
+  const handleToggleCardLock = async (card: WebCardRecord, forceAction?: 'approve' | 'reject') => {
     try {
-      const nextLocked = !card.locked;
-      const nextStatus = nextLocked ? card.status : 'active';
-      await toggleWebCardLockAdmin(card.code, nextLocked, nextStatus);
+      const nextLocked =
+        forceAction === 'approve'
+          ? false
+          : forceAction === 'reject'
+            ? true
+            : !card.locked;
+      const nextStatus: WebCardRecord['status'] = nextLocked ? 'expired' : 'active';
+      await toggleWebCardLockAdmin(card.code, nextLocked, nextStatus, card.orderCode);
       setWebCards((prev) =>
         prev.map((c) =>
           c.code === card.code ? { ...c, locked: nextLocked, status: nextStatus } : c
         )
       );
+      setDashNotice(
+        nextLocked
+          ? `Đã từ chối / khóa web thiệp /c/${card.code}.`
+          : `Đã duyệt web thiệp /c/${card.code} — khách hàng đã nhận được Link & Mã QR.`
+      );
+      loadDashboardData();
     } catch (err) {
-      setDashNotice(err instanceof Error ? err.message : 'Không thể đổi trạng thái khóa thiệp.');
+      setDashNotice(err instanceof Error ? err.message : 'Không thể đổi trạng thái duyệt thiệp.');
     }
   };
 
@@ -672,7 +684,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
             {paymentNotifs.length > 0 && (
               <div className="rounded-2xl border border-emerald-500/30 bg-emerald-950/20 p-4 space-y-2">
                 <div className="text-xs font-bold text-emerald-300">
-                  Thông báo "Đã chuyển khoản" mới từ khách ({paymentNotifs.length})
+                  Lệnh yêu cầu duyệt "Thanh toán" từ khách ({paymentNotifs.length})
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                   {paymentNotifs.slice(0, 6).map((n) => (
@@ -694,133 +706,165 @@ export const AdminPage: React.FC<AdminPageProps> = ({
             )}
 
             <div className="space-y-3">
-              {orders.map((ord) => (
-                <div
-                  key={ord.orderCode}
-                  className="rounded-2xl border border-[#E6BE73]/18 bg-[#1B1512] p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
-                >
-                  <div className="space-y-1">
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-[#A89B8E]">
-                      <span className="font-mono font-bold text-[#E6BE73]">{ord.orderCode}</span>
-                      <span>·</span>
-                      <span>{ord.orderType === 'gift_set' ? 'Đơn Set quà' : 'Đơn Web thiệp'}</span>
-                      <span>·</span>
-                      <span>{new Date(ord.createdAtMs).toLocaleString('vi-VN')}</span>
-                      {ord.customerMarkedPaid && (
-                        <>
-                          <span>·</span>
-                          <span className="text-emerald-300 font-semibold">Khách báo đã CK</span>
-                        </>
+              {orders.map((ord) => {
+                const hasPaymentNotif =
+                  ord.customerMarkedPaid ||
+                  paymentNotifs.some(
+                    (n) => n.orderCode.toUpperCase() === ord.orderCode.toUpperCase()
+                  );
+                return (
+                  <div
+                    key={ord.orderCode}
+                    className="rounded-2xl border border-[#E6BE73]/18 bg-[#1B1512] p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                  >
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-[#A89B8E]">
+                        <span className="font-mono font-bold text-[#E6BE73]">{ord.orderCode}</span>
+                        <span>·</span>
+                        <span>{ord.orderType === 'gift_set' ? 'Đơn Set quà' : 'Đơn Web thiệp'}</span>
+                        <span>·</span>
+                        <span>{new Date(ord.createdAtMs).toLocaleString('vi-VN')}</span>
+                        {hasPaymentNotif && ord.status === 'pending_payment' && (
+                          <>
+                            <span>·</span>
+                            <span className="text-amber-300 font-semibold">
+                              Khách đã bấm Thanh toán · Chờ duyệt
+                            </span>
+                          </>
+                        )}
+                      </div>
+                      <div className="text-sm font-semibold text-[#F7F1E8]">
+                        {ord.customerName} {ord.customerPhone ? `· ${ord.customerPhone}` : ''}
+                      </div>
+                      {ord.customerAddress && (
+                        <div className="text-xs text-[#C8BDB2]">Địa chỉ: {ord.customerAddress}</div>
+                      )}
+                      <div className="text-xs text-[#B8ABA0]">
+                        {ord.items.map((i) => `${i.title} x${i.quantity}`).join(', ')} ·{' '}
+                        <strong className="text-[#E6BE73] tabular-nums">
+                          {formatVnd(ord.totalAmount)}
+                        </strong>
+                        {ord.wantPrintedQr ? ' · Yêu cầu in QR bỏ hộp' : ''}
+                      </div>
+                      {ord.cardCode && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenCard(ord.cardCode!)}
+                          className="text-xs text-[#E6BE73] underline bg-transparent border-0 p-0 cursor-pointer inline-flex items-center gap-1"
+                        >
+                          <span>Mở /c/{ord.cardCode}</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </button>
                       )}
                     </div>
-                    <div className="text-sm font-semibold text-[#F7F1E8]">
-                      {ord.customerName} {ord.customerPhone ? `· ${ord.customerPhone}` : ''}
-                    </div>
-                    {ord.customerAddress && (
-                      <div className="text-xs text-[#C8BDB2]">Địa chỉ: {ord.customerAddress}</div>
-                    )}
-                    <div className="text-xs text-[#B8ABA0]">
-                      {ord.items.map((i) => `${i.title} x${i.quantity}`).join(', ')} ·{' '}
-                      <strong className="text-[#E6BE73] tabular-nums">
-                        {formatVnd(ord.totalAmount)}
-                      </strong>
-                      {ord.wantPrintedQr ? ' · Yêu cầu in QR bỏ hộp' : ''}
-                    </div>
-                    {ord.cardCode && (
-                      <button
-                        type="button"
-                        onClick={() => onOpenCard(ord.cardCode!)}
-                        className="text-xs text-[#E6BE73] underline bg-transparent border-0 p-0 cursor-pointer inline-flex items-center gap-1"
-                      >
-                        <span>Mở /c/{ord.cardCode}</span>
-                        <ExternalLink className="w-3 h-3" />
-                      </button>
-                    )}
-                  </div>
 
-                  <div className="flex flex-wrap items-center gap-2 shrink-0">
-                    {(
-                      [
-                        { id: 'pending_payment', label: 'Chờ thanh toán' },
-                        { id: 'paid', label: 'Đã thanh toán' },
-                        { id: 'delivered', label: 'Đã giao' },
-                        { id: 'cancelled', label: 'Hủy' },
-                      ] as const
-                    ).map((st) => (
-                      <button
-                        key={st.id}
-                        type="button"
-                        onClick={() => handleOrderStatusChange(ord, st.id)}
-                        className={`min-h-[36px] px-3 rounded-lg text-xs font-medium border cursor-pointer ${
-                          ord.status === st.id
-                            ? 'border-[#E6BE73] bg-[#E6BE73] text-[#1A1208] font-bold'
-                            : 'border-[#E6BE73]/20 bg-[#14100E] text-[#D7CCC0]'
-                        }`}
-                      >
-                        {st.label}
-                      </button>
-                    ))}
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {(
+                        [
+                          { id: 'pending_payment', label: 'Chờ duyệt' },
+                          { id: 'paid', label: 'Duyệt (Cấp Link & QR)' },
+                          { id: 'delivered', label: 'Đã giao' },
+                          { id: 'cancelled', label: 'Từ chối / Hủy' },
+                        ] as const
+                      ).map((st) => (
+                        <button
+                          key={st.id}
+                          type="button"
+                          onClick={() => handleOrderStatusChange(ord, st.id)}
+                          className={`min-h-[36px] px-3 rounded-lg text-xs font-medium border cursor-pointer ${
+                            ord.status === st.id
+                              ? 'border-[#E6BE73] bg-[#E6BE73] text-[#1A1208] font-bold'
+                              : 'border-[#E6BE73]/20 bg-[#14100E] text-[#D7CCC0]'
+                          }`}
+                        >
+                          {st.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
 
-        {/* TAB 2: QUẢN LÝ WEB THIỆP (MỞ / KHÓA / XÓA) */}
+        {/* TAB 2: QUẢN LÝ WEB THIỆP (DUYỆT / TỪ CHỐI / XÓA) */}
         {activeTab === 'cards' && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {webCards.map((c) => (
-              <div
-                key={c.code}
-                className="rounded-2xl border border-[#E6BE73]/18 bg-[#1B1512] p-5 space-y-3"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-xs text-[#E6BE73] font-mono font-bold">
-                      /c/{c.code} · {c.occasion} · {c.tier}
+            {webCards.map((c) => {
+              const isCardApproved = c.status === 'active' && !c.locked;
+              const isCardRejected = c.locked || c.status === 'expired';
+              return (
+                <div
+                  key={c.code}
+                  className="rounded-2xl border border-[#E6BE73]/18 bg-[#1B1512] p-5 space-y-3"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-xs text-[#E6BE73] font-mono font-bold">
+                        /c/{c.code} · {c.occasion} · {c.tier} {c.orderCode ? `· Đơn ${c.orderCode}` : ''}
+                      </div>
+                      <h3 className="text-base font-bold m-0 mt-0.5">
+                        Gửi {c.recipientName} (từ {c.senderName})
+                      </h3>
+                      <p className="text-xs text-[#A89B8E] m-0">
+                        Trạng thái:{' '}
+                        {isCardRejected ? (
+                          <strong className="text-rose-300">Đã từ chối / Đã khóa</strong>
+                        ) : isCardApproved ? (
+                          <strong className="text-emerald-300">Đã duyệt (Đã trả Link &amp; QR)</strong>
+                        ) : (
+                          <strong className="text-amber-300">Chờ duyệt</strong>
+                        )}{' '}
+                        · Giá: {formatVnd(c.price)}
+                      </p>
                     </div>
-                    <h3 className="text-base font-bold m-0 mt-0.5">
-                      Gửi {c.recipientName} (từ {c.senderName})
-                    </h3>
-                    <p className="text-xs text-[#A89B8E] m-0">
-                      Trạng thái: {c.locked ? 'Đang khóa' : c.status} · Giá: {formatVnd(c.price)}
-                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onOpenCard(c.code)}
+                      className="min-h-[36px] px-3 rounded-lg bg-[#271F1A] text-xs text-[#E6BE73] inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Xem</span>
+                    </button>
+
+                    {!isCardApproved && (
+                      <button
+                        type="button"
+                        onClick={() => handleToggleCardLock(c, 'approve')}
+                        className="min-h-[36px] px-3 rounded-lg bg-emerald-900/45 text-emerald-200 border border-emerald-500/45 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Unlock className="w-3.5 h-3.5" />
+                        <span>Duyệt (Cấp Link &amp; QR)</span>
+                      </button>
+                    )}
+
+                    {!isCardRejected && (
+                      <button
+                        type="button"
+                        onClick={() => handleToggleCardLock(c, 'reject')}
+                        className="min-h-[36px] px-3 rounded-lg bg-[#2A201A] text-[#F7F1E8] border border-[#E6BE73]/25 text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Lock className="w-3.5 h-3.5" />
+                        <span>Từ chối / Khóa</span>
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCard(c.code)}
+                      className="min-h-[36px] px-3 rounded-lg bg-[#2A1819] text-[#F09D8B] text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Xóa</span>
+                    </button>
                   </div>
                 </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => onOpenCard(c.code)}
-                    className="min-h-[36px] px-3 rounded-lg bg-[#271F1A] text-xs text-[#E6BE73] inline-flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    <span>Xem</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleToggleCardLock(c)}
-                    className={`min-h-[36px] px-3 rounded-lg text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer ${
-                      c.locked
-                        ? 'bg-emerald-900/40 text-emerald-200 border border-emerald-500/40'
-                        : 'bg-[#2A201A] text-[#F7F1E8] border border-[#E6BE73]/25'
-                    }`}
-                  >
-                    {c.locked ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
-                    <span>{c.locked ? 'Mở khóa' : 'Khóa thiệp'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteCard(c.code)}
-                    className="min-h-[36px] px-3 rounded-lg bg-[#2A1819] text-[#F09D8B] text-xs inline-flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Xóa</span>
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 

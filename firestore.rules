@@ -84,7 +84,7 @@ service cloud.firestore {
       data.greeting is string && data.greeting.size() >= 1 && data.greeting.size() <= 160 &&
       data.letter is string && data.letter.size() >= 1 && data.letter.size() <= 10000 &&
       data.accentColor is string && data.accentColor.size() >= 4 && data.accentColor.size() <= 20 &&
-      data.bgmId is string && data.bgmId.size() >= 1 && data.bgmId.size() <= 120 &&
+      data.bgmId is string && data.bgmId.size() >= 1 && data.bgmId.size() <= 600000 &&
       data.photosJson is string && data.photosJson.size() >= 2 && data.photosJson.size() <= 900000 &&
       (!('voiceAudioUrl' in data) || (data.voiceAudioUrl is string && data.voiceAudioUrl.size() <= 1500000)) &&
       data.status in ['pending_payment', 'active', 'expired'] &&
